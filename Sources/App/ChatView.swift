@@ -10,7 +10,7 @@ struct ChatView: View {
     var body: some View {
         Group {
             if let url {
-                WebView(url: url, betterTTV: betterTTV)
+                WebView(url: url, betterTTV: betterTTV, fixedViewport: true)
             } else {
                 placeholder
             }

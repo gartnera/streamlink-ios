@@ -11,6 +11,9 @@ struct WebView: UIViewRepresentable {
     let url: URL
     /// Load BetterTTV (emotes, chat enhancements) into Twitch pages.
     var betterTTV = false
+    /// Pin the page in place: for full-height layouts (Twitch popout chat) that
+    /// scroll internally, so WebKit's own scroll view never needs to move.
+    var fixedViewport = false
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -32,6 +35,19 @@ struct WebView: UIViewRepresentable {
         webView.isOpaque = false
         webView.scrollView.backgroundColor = .clear
         webView.uiDelegate = context.coordinator
+        if fixedViewport {
+            // When the keyboard shows, WebKit scrolls its scroll view to reveal the
+            // focused input and adds a keyboard-sized bottom inset — on top of the
+            // chat we already shrink above the keyboard, so the page could be
+            // dragged ~90% off screen. Keep it pinned at the origin instead.
+            let scrollView = webView.scrollView
+            scrollView.isScrollEnabled = false
+            scrollView.bounces = false
+            scrollView.contentInsetAdjustmentBehavior = .never
+            context.coordinator.offsetObservation = scrollView.observe(\.contentOffset) { sv, _ in
+                if sv.contentOffset != .zero { sv.contentOffset = .zero }
+            }
+        }
         if ProcessInfo.processInfo.isiOSAppOnMac {
             // The form accessory bar (prev/next/Done) normally rides on the
             // on-screen keyboard; on a Mac it pops up alone at the window bottom.
@@ -79,6 +95,8 @@ struct WebView: UIViewRepresentable {
     """
 
     final class Coordinator: NSObject, WKUIDelegate {
+        var offsetObservation: NSKeyValueObservation?
+
         /// Load target=_blank links (e.g. a login popup) in the same webview
         /// instead of silently dropping them.
         func webView(
