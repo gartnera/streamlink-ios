@@ -19,6 +19,8 @@ struct ContentView: View {
     /// Height of the on-screen keyboard, used to inset the chat above it (SwiftUI's
     /// automatic avoidance doesn't fire for a WKWebView first responder).
     @State private var keyboardHeight: CGFloat = 0
+    /// Running as an iOS app on an Apple silicon Mac ("Designed for iPad").
+    private static let isOnMac = ProcessInfo.processInfo.isiOSAppOnMac
 
     // Mini-player dimensions (16:9).
     private let miniWidth: CGFloat = 168
@@ -49,6 +51,9 @@ struct ContentView: View {
             if hasStream { withAnimation(spring) { presentation = .full } }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notif in
+            // On macOS there's no on-screen keyboard to make room for, but the
+            // notifications still fire for the hardware keyboard — ignore them.
+            guard !Self.isOnMac else { return }
             let h = (notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue.height ?? 0
             withAnimation(.easeOut(duration: 0.25)) {
                 keyboardHeight = h
@@ -56,6 +61,7 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            guard !Self.isOnMac else { return }
             withAnimation(.easeOut(duration: 0.25)) { keyboardVisible = false }
         }
         .task { await runDiagnostics() }
