@@ -92,10 +92,13 @@ def handle(request_json: str) -> str:
         if op == "diag":
             return json.dumps(_diag())
         if op == "streams":
-            return json.dumps(_streams(req["url"], req.get("twitch_auth")))
+            return json.dumps(
+                _streams(req["url"], req.get("twitch_auth"), req.get("options"))
+            )
         if op == "resolve":
             return json.dumps(
-                _resolve(req["url"], req.get("quality", "best"), req.get("twitch_auth"))
+                _resolve(req["url"], req.get("quality", "best"),
+                         req.get("twitch_auth"), req.get("options"))
             )
         return json.dumps({"ok": False, "error": f"unknown op: {op!r}"})
     except Exception as exc:  # noqa: BLE001
@@ -173,9 +176,22 @@ def _apply_twitch_auth(session, token) -> None:
         pass
 
 
-def _streams(url: str, twitch_auth=None) -> dict:
+def _apply_options(session, options) -> None:
+    """Apply arbitrary Streamlink session options (e.g. ``twitch-low-latency``)
+    from the app's settings. Unknown/invalid options are ignored."""
+    if not options:
+        return
+    for key, value in options.items():
+        try:
+            session.set_option(str(key), value)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _streams(url: str, twitch_auth=None, options=None) -> dict:
     session = _get_session()
     _apply_twitch_auth(session, twitch_auth)
+    _apply_options(session, options)
     streams = session.streams(url)
     if not streams:
         return {"ok": False, "error": "no playable streams found for this URL"}
@@ -183,9 +199,10 @@ def _streams(url: str, twitch_auth=None) -> dict:
     return {"ok": True, "plugin": plugin, "streams": _quality_names(streams)}
 
 
-def _resolve(url: str, quality: str, twitch_auth=None) -> dict:
+def _resolve(url: str, quality: str, twitch_auth=None, options=None) -> dict:
     session = _get_session()
     _apply_twitch_auth(session, twitch_auth)
+    _apply_options(session, options)
     streams = session.streams(url)
     if not streams:
         return {"ok": False, "error": "no playable streams found for this URL"}

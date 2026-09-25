@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import Combine
+import UIKit
 
 /// A user-saved stream URL, persisted across launches.
 struct SavedStream: Codable, Identifiable, Hashable {
@@ -38,6 +39,39 @@ final class StreamController: ObservableObject {
         player.onResumeRequested = { [weak self] in
             Task { @MainActor in await self?.reloadCurrent() }
         }
+        observeAppLifecycle()
+    }
+
+    // MARK: - Auto audio-only in background
+
+    /// The video quality we switched away from when backgrounding, to restore.
+    private var preBackgroundQuality: String?
+
+    private func observeAppLifecycle() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                       object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleEnterBackground() }
+        }
+        nc.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                       object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleEnterForeground() }
+        }
+    }
+
+    private func handleEnterBackground() {
+        guard UserDefaults.standard.bool(forKey: "audio_only_in_background"),
+              player.hasStream,
+              selectedQuality != "audio_only",
+              qualities.contains("audio_only") else { return }
+        preBackgroundQuality = selectedQuality
+        Task { await play(quality: "audio_only") }
+    }
+
+    private func handleEnterForeground() {
+        guard let quality = preBackgroundQuality else { return }
+        preBackgroundQuality = nil
+        Task { await play(quality: quality) }
     }
 
     /// Re-resolve and reload the current stream at its selected quality.
@@ -50,12 +84,18 @@ final class StreamController: ObservableObject {
     /// Whether the current URL is a Twitch stream (so we should attach auth).
     private var isTwitch: Bool { urlText.lowercased().contains("twitch.tv") }
 
-    /// Build a request body, attaching the Twitch auth token when relevant.
+    /// Build a request body, attaching the Twitch auth token and any Streamlink
+    /// options (e.g. low latency) that apply.
     private func requestBody(_ base: [String: Any]) async -> [String: Any] {
         var body = base
         if isTwitch, let token = await TwitchAuth.token() {
             body["twitch_auth"] = token
         }
+        var options: [String: Any] = [:]
+        if isTwitch, UserDefaults.standard.bool(forKey: "twitch_low_latency") {
+            options["twitch-low-latency"] = true
+        }
+        if !options.isEmpty { body["options"] = options }
         return body
     }
 
@@ -94,7 +134,9 @@ final class StreamController: ObservableObject {
             let r: ResolveResponse = try await PythonBridge.shared.request(
                 body, as: ResolveResponse.self)
             if r.ok, let sel = r.selected {
-                player.load(sel, title: nowPlayingTitle, subtitle: pluginName ?? "Streamlink")
+                let audioOnly = quality.lowercased().contains("audio")
+                player.load(sel, title: nowPlayingTitle,
+                            subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly)
                 status = "Playing \(sel.name)"
             } else {
                 status = "Cannot play: \(r.error ?? "unknown error")"

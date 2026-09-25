@@ -82,6 +82,16 @@ struct ContentView: View {
             .id("sharedPlayer")
 
         if presentation == .mini {
+            // Audio-only streams have no video, so show artwork in the mini player
+            // instead of a black frame (full mode keeps the plain player + chat).
+            if controller.player.isAudioOnly {
+                AudioArtworkView()
+                    .frame(width: frame.width, height: frame.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .offset(x: frame.minX, y: frame.minY)
+                    .allowsHitTesting(false)
+            }
+
             // AVPlayerViewController swallows taps (it shows its own transport
             // controls), so a transparent catcher on top handles tap-to-expand.
             Color.clear
@@ -293,11 +303,14 @@ struct DiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var loggedIn = false
     @State private var showLogin = false
+    @AppStorage("twitch_low_latency") private var lowLatency = false
+    @AppStorage("audio_only_in_background") private var audioOnlyInBackground = false
 
     var body: some View {
         NavigationStack {
             List {
                 accountSection
+                playbackSection
                 if let diag {
                     Section("Runtime") {
                         LabeledContent("Python", value: diag.python ?? "?")
@@ -373,6 +386,17 @@ struct DiagnosticsView: View {
             Text("Account")
         } footer: {
             Text("Logging in enables subscriber quality and fewer ads on Twitch. Your login stays on-device.")
+        }
+    }
+
+    private var playbackSection: some View {
+        Section {
+            Toggle("Twitch low latency", isOn: $lowLatency)
+            Toggle("Audio-only in background", isOn: $audioOnlyInBackground)
+        } header: {
+            Text("Playback")
+        } footer: {
+            Text("Low latency reduces Twitch delay. Audio-only in background drops video to save data when you leave the app.")
         }
     }
 

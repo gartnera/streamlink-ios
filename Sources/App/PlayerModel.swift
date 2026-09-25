@@ -13,6 +13,10 @@ final class PlayerModel: ObservableObject {
     /// True once a stream has been loaded, so the UI knows to show the player.
     @Published private(set) var hasStream = false
 
+    /// True when the current stream has no video (audio-only quality), so the UI
+    /// can show artwork instead of a black frame.
+    @Published private(set) var isAudioOnly = false
+
     /// Invoked when the user resumes a torn-down live stream; the controller
     /// re-resolves the current stream and calls `load` again.
     var onResumeRequested: (() -> Void)?
@@ -37,12 +41,13 @@ final class PlayerModel: ObservableObject {
     /// Load (or switch to) a stream. A no-op if it's already the current URL,
     /// otherwise the existing item is replaced so the old stream stops cleanly.
     /// `title`/`subtitle` populate Control Center / lock-screen Now Playing info.
-    func load(_ stream: SelectedStream, title: String, subtitle: String) {
+    func load(_ stream: SelectedStream, title: String, subtitle: String, audioOnly: Bool = false) {
         guard currentURL != stream.url, let url = URL(string: stream.url) else { return }
         rebuilding = true
         defer { rebuilding = false }
         currentURL = stream.url
         suspended = false
+        isAudioOnly = audioOnly
 
         var options: [String: Any] = [:]
         if !stream.headers.isEmpty {
