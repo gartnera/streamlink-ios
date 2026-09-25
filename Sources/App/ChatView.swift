@@ -5,11 +5,12 @@ import SwiftUI
 /// layout is ready for chat regardless.
 struct ChatView: View {
     let url: URL?
+    @AppStorage("chat_betterttv") private var betterTTV = true
 
     var body: some View {
         Group {
             if let url {
-                WebView(url: url)
+                WebView(url: url, betterTTV: betterTTV)
             } else {
                 placeholder
             }

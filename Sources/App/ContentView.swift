@@ -404,12 +404,14 @@ struct DiagnosticsView: View {
     @State private var showLogin = false
     @AppStorage("twitch_low_latency") private var lowLatency = false
     @AppStorage("audio_only_in_background") private var audioOnlyInBackground = false
+    @AppStorage("chat_betterttv") private var betterTTV = true
 
     var body: some View {
         NavigationStack {
             List {
                 accountSection
                 playbackSection
+                chatSection
                 if let diag {
                     Section("Runtime") {
                         LabeledContent("Python", value: diag.python ?? "?")
@@ -496,6 +498,16 @@ struct DiagnosticsView: View {
             Text("Playback")
         } footer: {
             Text("Low latency reduces Twitch delay. Audio-only in background drops video to save data when you leave the app.")
+        }
+    }
+
+    private var chatSection: some View {
+        Section {
+            Toggle("BetterTTV in chat", isOn: $betterTTV)
+        } header: {
+            Text("Chat")
+        } footer: {
+            Text("Loads BetterTTV from cdn.betterttv.net into Twitch chat for BTTV/FFZ/7TV emotes and chat features. Applies to the next stream you open.")
         }
     }
 

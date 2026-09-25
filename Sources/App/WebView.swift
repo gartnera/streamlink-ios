@@ -9,11 +9,18 @@ private let log = Logger(subsystem: "com.agartner.streamlink", category: "WebVie
 /// `auth-token` cookie is available to `TwitchAuth`.
 struct WebView: UIViewRepresentable {
     let url: URL
+    /// Load BetterTTV (emotes, chat enhancements) into Twitch pages.
+    var betterTTV = false
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.websiteDataStore = .default()   // persistent, shared cookie store
+        if betterTTV {
+            config.userContentController.addUserScript(WKUserScript(
+                source: Self.betterTTVLoaderJS, injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true))
+        }
         if ProcessInfo.processInfo.isiOSAppOnMac {
             // WebKit derives the text input traits from the focused element, and
             // with autocorrect/suggestions on, the shortcuts bar shows predictions.
@@ -43,6 +50,18 @@ struct WebView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
+
+    /// The BetterTTV userscript's loader: pull the hosted production build into
+    /// Twitch pages (it keeps itself up to date, like the browser extension).
+    private static let betterTTVLoaderJS = """
+    (function () {
+      if (!/(^|\\.)twitch\\.tv$/.test(location.hostname) || window.__bttvInjected) return;
+      window.__bttvInjected = true;
+      var script = document.createElement('script');
+      script.src = 'https://cdn.betterttv.net/betterttv.js';
+      (document.head || document.documentElement).appendChild(script);
+    })();
+    """
 
     /// Turn off autocorrect/spellcheck/suggestions on whatever gets focus (Twitch
     /// chat is a contenteditable), capturing before WebKit reads the traits.
