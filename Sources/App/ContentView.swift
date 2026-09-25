@@ -134,6 +134,33 @@ struct ContentView: View {
 
             miniCloseButton(geo, videoFrame: frame)
         }
+
+        // Reconnect / failure overlay over the video area (full mode only).
+        if full, !videoHidden, controller.player.playbackFailed || controller.player.isReconnecting {
+            ZStack {
+                if controller.player.playbackFailed {
+                    Color.black.opacity(0.7)
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.largeTitle).foregroundStyle(.yellow)
+                        Text("Playback failed").font(.headline).foregroundStyle(.white)
+                        Button { controller.player.retry() } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    Color.black.opacity(0.5)
+                    VStack(spacing: 8) {
+                        ProgressView().tint(.white)
+                        Text("Reconnecting…").font(.footnote).foregroundStyle(.white)
+                    }
+                }
+            }
+            .frame(width: frame.width, height: frame.height)
+            .offset(x: frame.minX, y: frame.minY)
+            .allowsHitTesting(controller.player.playbackFailed)
+        }
     }
 
     private var qualityBar: some View {

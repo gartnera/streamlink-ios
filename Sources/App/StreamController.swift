@@ -34,9 +34,9 @@ final class StreamController: ObservableObject {
         player.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
-        // When the user resumes a torn-down live stream, re-resolve it fresh so
-        // playback restarts at the live edge instead of buffering forever.
-        player.onResumeRequested = { [weak self] in
+        // When playback drops/fails, the player asks us to re-resolve the stream
+        // fresh (new live-edge URL) so it can reconnect.
+        player.onReloadRequested = { [weak self] in
             Task { @MainActor in await self?.reloadCurrent() }
         }
         observeAppLifecycle()
