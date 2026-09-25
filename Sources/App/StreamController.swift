@@ -71,6 +71,8 @@ final class StreamController: ObservableObject {
     private func handleEnterForeground() {
         guard let quality = preBackgroundQuality else { return }
         preBackgroundQuality = nil
+        // Optionally stay audio-only; the user picks a video quality to resume video.
+        guard !UserDefaults.standard.bool(forKey: "audio_only_on_resume") else { return }
         Task { await play(quality: quality) }
     }
 

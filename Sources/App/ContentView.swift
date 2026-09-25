@@ -404,6 +404,7 @@ struct DiagnosticsView: View {
     @State private var showLogin = false
     @AppStorage("twitch_low_latency") private var lowLatency = false
     @AppStorage("audio_only_in_background") private var audioOnlyInBackground = false
+    @AppStorage("audio_only_on_resume") private var audioOnlyOnResume = false
     @AppStorage("chat_betterttv") private var betterTTV = true
 
     var body: some View {
@@ -494,10 +495,12 @@ struct DiagnosticsView: View {
         Section {
             Toggle("Twitch low latency", isOn: $lowLatency)
             Toggle("Audio-only in background", isOn: $audioOnlyInBackground)
+            Toggle("Stay audio-only on resume", isOn: $audioOnlyOnResume)
+                .disabled(!audioOnlyInBackground)
         } header: {
             Text("Playback")
         } footer: {
-            Text("Low latency reduces Twitch delay. Audio-only in background drops video to save data when you leave the app.")
+            Text("Low latency reduces Twitch delay. Audio-only in background drops video to save data when you leave the app. Stay audio-only on resume keeps it that way when you come back — pick a quality to turn video back on.")
         }
     }
 
