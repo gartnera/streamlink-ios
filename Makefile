@@ -12,7 +12,7 @@
 SIM     ?= iPhone 17
 SCHEME  ?= Streamlink
 PROJECT ?= Streamlink.xcodeproj
-BUNDLE  ?= com.example.streamlink
+BUNDLE  ?= com.agartner.streamlink
 DERIVED ?= build
 SMOKE_URL ?= hls://https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
 

@@ -1,46 +1,83 @@
 import SwiftUI
 import AVKit
+import UIKit
 
-/// Wraps AVPlayer in a SwiftUI view. Builds an AVURLAsset with any HTTP headers
-/// Streamlink says the stream requires, then plays natively (HLS / progressive),
-/// with audio going through the AVAudioSession configured at launch.
+/// Hosts the shared `AVPlayer` in an `AVPlayerViewController`.
+///
+/// Background behavior:
+///   • Video → Picture in Picture. PiP is allowed and starts automatically when
+///     the app is backgrounded while a video is playing, so video keeps going.
+///   • Audio → if PiP isn't taking over (e.g. audio-only stream, or PiP declined),
+///     the player is detached from the controller on backgrounding so AVKit does
+///     not pause it — audio then continues via the `.playback` AVAudioSession.
 struct PlayerView: UIViewControllerRepresentable {
-    let stream: SelectedStream
+    @ObservedObject var model: PlayerModel
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
-        controller.player = makePlayer()
-        controller.player?.play()
+        controller.player = model.player
+        controller.allowsPictureInPicturePlayback = true
+        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        controller.delegate = context.coordinator
+
+        context.coordinator.controller = controller
+        context.coordinator.model = model
+        context.coordinator.observeAppLifecycle()
+
+        model.player.play()
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        // Rebuild only if the stream identity changed.
-        if context.coordinator.currentURL != stream.url {
-            context.coordinator.currentURL = stream.url
-            controller.player = makePlayer()
-            controller.player?.play()
+        // The player is shared via `model`; nothing to reconfigure per update.
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, AVPlayerViewControllerDelegate {
+        weak var controller: AVPlayerViewController?
+        var model: PlayerModel?
+        private var pipActive = false
+
+        func observeAppLifecycle() {
+            let nc = NotificationCenter.default
+            nc.addObserver(self, selector: #selector(didEnterBackground),
+                           name: UIApplication.didEnterBackgroundNotification, object: nil)
+            nc.addObserver(self, selector: #selector(willEnterForeground),
+                           name: UIApplication.willEnterForegroundNotification, object: nil)
         }
-    }
 
-    func makeCoordinator() -> Coordinator {
-        let c = Coordinator()
-        c.currentURL = stream.url
-        return c
-    }
+        deinit { NotificationCenter.default.removeObserver(self) }
 
-    final class Coordinator {
-        var currentURL: String?
-    }
-
-    private func makePlayer() -> AVPlayer? {
-        guard let url = URL(string: stream.url) else { return nil }
-        var options: [String: Any] = [:]
-        if !stream.headers.isEmpty {
-            options["AVURLAssetHTTPHeaderFieldsKey"] = stream.headers
+        @objc private func didEnterBackground() {
+            // Give PiP a moment to claim the session; if it doesn't, detach the
+            // player so AVKit keeps audio playing instead of pausing on hide.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                guard let self, !self.pipActive else { return }
+                self.controller?.player = nil
+            }
         }
-        let asset = AVURLAsset(url: url, options: options)
-        let item = AVPlayerItem(asset: asset)
-        return AVPlayer(playerItem: item)
+
+        @objc private func willEnterForeground() {
+            guard !pipActive, controller?.player == nil else { return }
+            controller?.player = model?.player
+        }
+
+        // MARK: AVPlayerViewControllerDelegate (PiP lifecycle)
+
+        func playerViewControllerWillStartPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            pipActive = true
+        }
+
+        func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            pipActive = false
+        }
+
+        func playerViewController(
+            _ playerViewController: AVPlayerViewController,
+            restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+        ) {
+            completionHandler(true)
+        }
     }
 }

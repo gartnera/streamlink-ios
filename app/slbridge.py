@@ -92,9 +92,11 @@ def handle(request_json: str) -> str:
         if op == "diag":
             return json.dumps(_diag())
         if op == "streams":
-            return json.dumps(_streams(req["url"]))
+            return json.dumps(_streams(req["url"], req.get("twitch_auth")))
         if op == "resolve":
-            return json.dumps(_resolve(req["url"], req.get("quality", "best")))
+            return json.dumps(
+                _resolve(req["url"], req.get("quality", "best"), req.get("twitch_auth"))
+            )
         return json.dumps({"ok": False, "error": f"unknown op: {op!r}"})
     except Exception as exc:  # noqa: BLE001
         return json.dumps({
@@ -157,8 +159,23 @@ def _quality_names(streams: dict) -> list[str]:
     return front + rest
 
 
-def _streams(url: str) -> dict:
+def _apply_twitch_auth(session, token) -> None:
+    """Authenticate Twitch API requests with the user's ``auth-token`` cookie
+    (captured from the in-app chat webview). This can unlock subscriber quality
+    and reduce ads, mirroring ``--twitch-api-header=Authorization=OAuth <token>``.
+    """
+    try:
+        if token:
+            session.set_option("twitch-api-header", [("Authorization", f"OAuth {token}")])
+        else:
+            session.set_option("twitch-api-header", None)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _streams(url: str, twitch_auth=None) -> dict:
     session = _get_session()
+    _apply_twitch_auth(session, twitch_auth)
     streams = session.streams(url)
     if not streams:
         return {"ok": False, "error": "no playable streams found for this URL"}
@@ -166,8 +183,9 @@ def _streams(url: str) -> dict:
     return {"ok": True, "plugin": plugin, "streams": _quality_names(streams)}
 
 
-def _resolve(url: str, quality: str) -> dict:
+def _resolve(url: str, quality: str, twitch_auth=None) -> dict:
     session = _get_session()
+    _apply_twitch_auth(session, twitch_auth)
     streams = session.streams(url)
     if not streams:
         return {"ok": False, "error": "no playable streams found for this URL"}

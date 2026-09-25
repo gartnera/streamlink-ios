@@ -86,7 +86,7 @@ their own free Apple ID:
 3. Build to your device, or archive and sign with AltStore / Sideloadly.
 
 The only entitlement is background audio (`UIBackgroundModes: audio`) — no special provisioning
-needed. Bundle id is `com.example.streamlink`; change it in `project.yml` if you like.
+needed. Bundle id is `com.agartner.streamlink`; change it in `project.yml` if you like.
 
 ## Layout
 
