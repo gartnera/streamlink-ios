@@ -1,0 +1,4 @@
+e26d97f8189c84b05d474728d808d7918c0b111d86fb3a80f1b455e546f9dd6a  lxml-6.1.3-cp314-cp314-ios_13_0_arm64_iphoneos.whl
+c9d5c6171b0ae490cbe7d7ab2821501c92302f1c57d8716de4ae3a46749cb989  lxml-6.1.3-cp314-cp314-ios_13_0_arm64_iphonesimulator.whl
+063a313b808a40a36058621205ab99eedede07b6f8285a50c30f5ebed79c6492  pycryptodome-3.23.0-cp37-abi3-ios_13_0_arm64_iphoneos.whl
+fc3971e732724bbad62bf0841f2ec777e6ab123d991fef7fdb6ab4d96c9fe505  pycryptodome-3.23.0-cp37-abi3-ios_13_0_arm64_iphonesimulator.whl

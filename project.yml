@@ -1,0 +1,88 @@
+name: Streamlink
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    # Leave the team empty so anyone can select their own for sideloading.
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    # Required by Python-Apple-support integration:
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_TESTABILITY: YES
+    FRAMEWORK_SEARCH_PATHS:
+      - $(inherited)
+      - $(PROJECT_DIR)
+    HEADER_SEARCH_PATHS:
+      - $(inherited)
+      - $(BUILT_PRODUCTS_DIR)/Python.framework/Headers
+    GCC_WARN_ABOUT_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: NO
+    # Streamlink probes many hostnames; allow arbitrary loads for stream I/O.
+    SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridge/Streamlink-Bridging-Header.h
+
+targets:
+  Streamlink:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: app
+        type: folder
+        buildPhase: resources
+      - path: app_packages
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - framework: Python.xcframework
+        embed: true
+        codeSign: true
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Streamlink
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIBackgroundModes:
+          - audio
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.streamlink
+        # The install_python run script needs a stable Python version string.
+        MARKETING_VERSION: "0.1.0"
+    postBuildScripts:
+      - name: Process Python libraries
+        basedOnDependencyAnalysis: false
+        shell: /bin/bash
+        script: |
+          set -e
+          source "$PROJECT_DIR/Python.xcframework/build/utils.sh"
+
+          # Select the platform-correct native (compiled) packages and overlay
+          # them into the app_packages already copied into the bundle.
+          if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then
+            NATIVE_SLICE="iphonesimulator"
+          else
+            NATIVE_SLICE="iphoneos"
+          fi
+          NATIVE_DIR="$PROJECT_DIR/native/$NATIVE_SLICE"
+          if [ -d "$NATIVE_DIR" ]; then
+            echo "Overlaying native modules from $NATIVE_SLICE"
+            rsync -au "$NATIVE_DIR/" "$CODESIGNING_FOLDER_PATH/app_packages/"
+          else
+            echo "warning: no native modules for $NATIVE_SLICE ($NATIVE_DIR missing)"
+          fi
+
+          # Install stdlib + convert every .so (stdlib + app_packages) into a
+          # signed framework, as required by iOS.
+          install_python Python.xcframework app app_packages
