@@ -13,6 +13,12 @@ struct ContentView: View {
     @GestureState private var dragY: CGFloat = 0
     @State private var diag: DiagResponse?
     @State private var showDiagnostics = false
+    /// True while the keyboard is up (e.g. typing in chat) — we then collapse the
+    /// video/quality chrome so the chat webview fills the space above the keyboard.
+    @State private var keyboardVisible = false
+    /// Height of the on-screen keyboard, used to inset the chat above it (SwiftUI's
+    /// automatic avoidance doesn't fire for a WKWebView first responder).
+    @State private var keyboardHeight: CGFloat = 0
 
     // Mini-player dimensions (16:9).
     private let miniWidth: CGFloat = 168
@@ -34,9 +40,23 @@ struct ContentView: View {
                 }
             }
         }
+        // Keep `geo` at full height when the keyboard shows (SwiftUI would
+        // otherwise shrink the GeometryReader); we inset the chat manually via
+        // keyboardHeight, so this avoids double-counting and the webview overflow.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(diag: diag) }
         .onChange(of: controller.player.hasStream) { hasStream in
             if hasStream { withAnimation(spring) { presentation = .full } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notif in
+            let h = (notif.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue.height ?? 0
+            withAnimation(.easeOut(duration: 0.25)) {
+                keyboardHeight = h
+                keyboardVisible = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(.easeOut(duration: 0.25)) { keyboardVisible = false }
         }
         .task { await runDiagnostics() }
         .task { await maybeRunSmokeTest() }
@@ -51,6 +71,9 @@ struct ContentView: View {
         let progress = dragProgress
         let full = presentation == .full
         let chromeOpacity = full ? 1 - progress : 0
+        // While typing in chat, collapse the video + quality bar so the webview
+        // gets the full height above the keyboard.
+        let videoHidden = full && keyboardVisible
 
         // Full-mode backdrop + chrome. Always in the tree (so the player keeps a
         // stable position/identity), just faded out and non-interactive in mini.
@@ -59,26 +82,35 @@ struct ContentView: View {
             .opacity(chromeOpacity)
             .allowsHitTesting(full)
 
+        // Inset the chat above the keyboard (keyboard height minus the bottom
+        // safe area, which the keyboard already covers).
+        let kbInset = videoHidden ? max(0, keyboardHeight - geo.safeAreaInsets.bottom) : 0
+
         VStack(spacing: 0) {
-            Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
-            qualityBar
+            if !videoHidden {
+                Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
+                qualityBar
+            }
             ChatView(url: controller.chatURL)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, kbInset)
         .opacity(chromeOpacity)
         .allowsHitTesting(full)
 
         // The single shared player instance — a constant id keeps it alive as its
         // frame animates between full and mini, so playback is never interrupted.
         PlayerView(model: controller.player)
-            .frame(width: frame.width, height: frame.height)
+            .frame(width: frame.width, height: videoHidden ? 0 : frame.height)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: presentation == .mini ? 12 : 0))
             .shadow(color: .black.opacity(presentation == .mini ? 0.3 : 0),
                     radius: 8, y: 4)
             .scaleEffect(full ? 1 - progress * 0.08 : 1, anchor: .top)
+            .opacity(videoHidden ? 0 : 1)
             .offset(x: frame.minX, y: frame.minY + (full ? dragY : 0))
             .simultaneousGesture(pullDownGesture)
+            .allowsHitTesting(!videoHidden)
             .id("sharedPlayer")
 
         if presentation == .mini {
