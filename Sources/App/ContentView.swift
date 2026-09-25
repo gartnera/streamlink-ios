@@ -77,9 +77,11 @@ struct ContentView: View {
         let progress = dragProgress
         let full = presentation == .full
         let chromeOpacity = full ? 1 - progress : 0
+        let wide = isWide(geo)
         // While typing in chat, collapse the video + quality bar so the webview
-        // gets the full height above the keyboard.
-        let videoHidden = full && keyboardVisible
+        // gets the full height above the keyboard. Side-by-side, the chat column
+        // is already full height, so the video stays.
+        let videoHidden = full && keyboardVisible && !wide
 
         // Full-mode backdrop + chrome. Always in the tree (so the player keeps a
         // stable position/identity), just faded out and non-interactive in mini.
@@ -90,17 +92,34 @@ struct ContentView: View {
 
         // Inset the chat above the keyboard (keyboard height minus the bottom
         // safe area, which the keyboard already covers).
-        let kbInset = videoHidden ? max(0, keyboardHeight - geo.safeAreaInsets.bottom) : 0
+        let kbInset = (videoHidden || (wide && keyboardVisible))
+            ? max(0, keyboardHeight - geo.safeAreaInsets.bottom) : 0
 
-        VStack(spacing: 0) {
-            if !videoHidden {
-                Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
-                qualityBar
+        Group {
+            if wide {
+                // Desktop / landscape: video + quality bar on the left, chat on the right.
+                HStack(spacing: 0) {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: max(0, geo.size.height - qualityBarHeight))   // video area
+                        qualityBar.frame(height: qualityBarHeight)
+                    }
+                    .frame(width: geo.size.width - chatColumnWidth(geo))
+                    Divider()
+                    ChatView(url: controller.chatURL)
+                        .padding(.bottom, kbInset)
+                }
+            } else {
+                VStack(spacing: 0) {
+                    if !videoHidden {
+                        Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
+                        qualityBar
+                    }
+                    ChatView(url: controller.chatURL)
+                }
+                .padding(.bottom, kbInset)
             }
-            ChatView(url: controller.chatURL)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.bottom, kbInset)
         .opacity(chromeOpacity)
         .allowsHitTesting(full)
 
@@ -205,6 +224,10 @@ struct ContentView: View {
     private func playerFrame(_ geo: GeometryProxy) -> CGRect {
         let w = geo.size.width
         switch presentation {
+        case .full where isWide(geo):
+            // Fill the left column above the quality bar; AVKit letterboxes.
+            return CGRect(x: 0, y: 0, width: w - chatColumnWidth(geo),
+                          height: max(0, geo.size.height - qualityBarHeight))
         case .full:
             return CGRect(x: 0, y: 0, width: w, height: (w * 9 / 16).rounded())
         case .mini:
@@ -213,6 +236,17 @@ struct ContentView: View {
                           width: miniWidth, height: miniHeight)
         }
     }
+
+    /// Landscape / desktop-sized windows put chat beside the video instead of below.
+    private func isWide(_ geo: GeometryProxy) -> Bool {
+        geo.size.width > geo.size.height && geo.size.width >= 700
+    }
+
+    private func chatColumnWidth(_ geo: GeometryProxy) -> CGFloat {
+        min(456, max(360, (geo.size.width * 0.36).rounded()))
+    }
+
+    private let qualityBarHeight: CGFloat = 52
 
     /// 0 → not dragging, 1 → dragged far enough to collapse.
     private var dragProgress: CGFloat {
