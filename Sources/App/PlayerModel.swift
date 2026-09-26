@@ -32,6 +32,12 @@ final class PlayerModel: ObservableObject {
     /// adaptive "auto" stream tells us which variant AVPlayer picked.
     @Published private(set) var videoHeight: Int?
 
+    /// Whether the current item is an adaptive (multivariant) stream.
+    private var isAdaptive = false
+    /// While no video is visible (backgrounded without PiP), adaptive streams are
+    /// throttled so AVPlayer drops to their audio-only variant — no reload needed.
+    private var backgroundAudioOnly = false
+
     /// Re-resolve the current stream fresh (new live-edge URL) and call `load`.
     var onReloadRequested: (() -> Void)?
 
@@ -47,6 +53,8 @@ final class PlayerModel: ObservableObject {
     private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     private var presentationSizeObservation: NSKeyValueObservation?
+    /// Retained here: AVAssetResourceLoader holds its delegate weakly.
+    private var playlistLoader: MultivariantPlaylistLoader?
     private var itemTokens: [NSObjectProtocol] = []
 
     private lazy var nowPlaying = NowPlayingCenter(player: player)
@@ -72,7 +80,7 @@ final class PlayerModel: ObservableObject {
     /// `maxResolutionOnCellular` caps adaptive (multivariant) streams on
     /// expensive networks; `.zero` means no cap.
     func load(_ stream: SelectedStream, title: String, subtitle: String, audioOnly: Bool = false,
-              maxResolutionOnCellular: CGSize = .zero) {
+              adaptive: Bool = false, maxResolutionOnCellular: CGSize = .zero) {
         guard currentURL != stream.url, let url = URL(string: stream.url) else { return }
         rebuilding = true
         defer { rebuilding = false }
@@ -85,15 +93,44 @@ final class PlayerModel: ObservableObject {
         if !stream.headers.isEmpty {
             options["AVURLAssetHTTPHeaderFieldsKey"] = stream.headers
         }
-        let asset = AVURLAsset(url: url, options: options)
+        // Adaptive streams load their master playlist through our rewriter so the
+        // audio-only variant is selectable in the background.
+        let rewrite = adaptive
+        let assetURL = rewrite ? (MultivariantPlaylistLoader.assetURL(for: url) ?? url) : url
+        let asset = AVURLAsset(url: assetURL, options: options)
+        if rewrite {
+            let loader = MultivariantPlaylistLoader(headers: stream.headers)
+            asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+            playlistLoader = loader
+        } else {
+            playlistLoader = nil
+        }
         let item = AVPlayerItem(asset: asset)
         item.preferredMaximumResolutionForExpensiveNetworks = maxResolutionOnCellular
+        isAdaptive = adaptive
+        applyBackgroundAudioOnly(to: item)
         videoHeight = nil
         observe(item)
         player.replaceCurrentItem(with: item)
         player.play()
         nowPlaying.update(title: title, subtitle: subtitle)
         if !hasStream { hasStream = true }
+    }
+
+    /// Called when video stops or starts being visible (app backgrounded without
+    /// PiP, and back). For adaptive streams, cap the bitrate so AVPlayer switches
+    /// to the audio-only variant, and lift the cap to switch back up.
+    func setBackgroundAudioOnly(_ on: Bool) {
+        backgroundAudioOnly = on
+        if let item = player.currentItem { applyBackgroundAudioOnly(to: item) }
+    }
+
+    private var isBackgroundAudioOnly: Bool { backgroundAudioOnly && isAdaptive }
+
+    private func applyBackgroundAudioOnly(to item: AVPlayerItem) {
+        // "As low as possible": AVPlayer settles on the lowest variant, which for
+        // Twitch-style playlists is audio_only.
+        item.preferredPeakBitRate = isBackgroundAudioOnly ? 1 : 0
     }
 
     /// Stop playback and tear down the current item (dismisses the player UI).
@@ -107,6 +144,7 @@ final class PlayerModel: ObservableObject {
         nowPlaying.clear()
         currentURL = nil
         isAudioOnly = false
+        isAdaptive = false
         videoHeight = nil
         isReconnecting = false
         playbackFailed = false

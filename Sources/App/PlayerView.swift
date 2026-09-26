@@ -96,16 +96,23 @@ struct PlayerView: UIViewControllerRepresentable {
         @objc private func didEnterBackground() {
             controlsTimer?.invalidate()
             controlsTimer = nil
+            // On lock (no PiP) AVKit pauses the still-attached player right away,
+            // so remember whether it was playing to resume after detaching.
+            let wasPlaying = (model?.player.rate ?? 0) > 0
             // Give PiP a moment to claim the session; if it doesn't, detach the
             // player so AVKit keeps audio playing instead of pausing on hide.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, !self.pipActive else { return }
                 self.controller?.player = nil
+                if wasPlaying { self.model?.player.play() }
+                // No video visible: adaptive streams drop to audio-only.
+                self.model?.setBackgroundAudioOnly(true)
             }
         }
 
         @objc private func willEnterForeground() {
             trackControlsVisibility()
+            model?.setBackgroundAudioOnly(false)
             guard !pipActive, controller?.player == nil else { return }
             controller?.player = model?.player
         }

@@ -64,9 +64,11 @@ final class StreamController: ObservableObject {
     }
 
     private func handleEnterBackground() {
+        // Auto streams go audio-only in the background on their own (see
+        // PlayerModel.setBackgroundAudioOnly), without a reload.
         guard UserDefaults.standard.bool(forKey: "audio_only_in_background"),
               player.hasStream,
-              selectedQuality != "audio_only",
+              selectedQuality != "audio_only", selectedQuality != "auto",
               qualities.contains("audio_only") else { return }
         preBackgroundQuality = selectedQuality
         Task { await play(quality: "audio_only") }
@@ -149,7 +151,7 @@ final class StreamController: ObservableObject {
                 let cap = sel.name == "auto" && capOnCellular ? CGSize(width: 1280, height: 720) : .zero
                 player.load(sel, title: nowPlayingTitle,
                             subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly,
-                            maxResolutionOnCellular: cap)
+                            adaptive: sel.name == "auto", maxResolutionOnCellular: cap)
                 status = "Playing \(sel.name)"
             } else {
                 status = "Cannot play: \(r.error ?? "unknown error")"

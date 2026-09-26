@@ -347,7 +347,8 @@ struct ContentView: View {
                 }
                 controller.selectedQuality = sel.name
                 controller.player.load(sel, title: controller.nowPlayingTitle,
-                                       subtitle: controller.pluginName ?? "Streamlink")
+                                       subtitle: controller.pluginName ?? "Streamlink",
+                                       adaptive: sel.name == "auto")
                 let pb = await probePlayback(sel)
                 out.merge(pb) { _, new in new }
                 out["qualities"] = controller.qualities
@@ -510,7 +511,7 @@ struct DiagnosticsView: View {
             SettingToggle("Auto quality", "Best adapts to your connection.", isOn: $autoQuality)
             SettingToggle("Limit to 720p on cellular", "Best/Auto open at 720p on mobile data.",
                           isOn: $cap720OnCellular)
-            SettingToggle("Audio-only in background", "Drops video when you leave the app.",
+            SettingToggle("Audio-only in background", "Drops video when you leave the app. Auto always does.",
                           isOn: $audioOnlyInBackground)
             SettingToggle("Stay audio-only on resume", "Pick a quality to turn video back on.",
                           isOn: $audioOnlyOnResume)
