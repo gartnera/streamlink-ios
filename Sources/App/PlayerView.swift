@@ -57,16 +57,24 @@ struct PlayerView: UIViewControllerRepresentable {
 
         private var controlsTimer: Timer?
         private weak var controlsView: UIView?
+        /// Failed lookups since the last hit; we stop walking the tree after ~5s.
+        private var controlsLookupMisses = 0
+        private let maxControlsLookupMisses = 50
 
         /// AVKit has no public API for whether its inline controls are showing,
         /// so poll its controls container (e.g. `AVMobileGlassControlsView` on
         /// iOS 26), which is hidden whenever the controls fade out. If it can't
         /// be found, report the controls as visible so our overlay stays usable.
+        /// Paused while the app is in the background.
         func trackControlsVisibility() {
+            controlsTimer?.invalidate()
+            controlsLookupMisses = 0
             controlsTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self, let root = self.controller?.view else { return }
-                if self.controlsView?.isDescendant(of: root) != true {
+                if self.controlsView?.isDescendant(of: root) != true,
+                   self.controlsLookupMisses < self.maxControlsLookupMisses {
                     self.controlsView = Self.findControlsView(in: root)
+                    self.controlsLookupMisses = self.controlsView == nil ? self.controlsLookupMisses + 1 : 0
                 }
                 let visible = self.controlsView.map { !$0.isHidden && $0.alpha > 0.01 } ?? true
                 if self.model?.controlsVisible != visible { self.model?.controlsVisible = visible }
@@ -86,6 +94,8 @@ struct PlayerView: UIViewControllerRepresentable {
         }
 
         @objc private func didEnterBackground() {
+            controlsTimer?.invalidate()
+            controlsTimer = nil
             // Give PiP a moment to claim the session; if it doesn't, detach the
             // player so AVKit keeps audio playing instead of pausing on hide.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
@@ -95,6 +105,7 @@ struct PlayerView: UIViewControllerRepresentable {
         }
 
         @objc private func willEnterForeground() {
+            trackControlsVisibility()
             guard !pipActive, controller?.player == nil else { return }
             controller?.player = model?.player
         }
