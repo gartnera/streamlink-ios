@@ -24,6 +24,16 @@ struct WebView: UIViewRepresentable {
                 source: Self.betterTTVLoaderJS, injectionTime: .atDocumentEnd,
                 forMainFrameOnly: true))
         }
+        if fixedViewport {
+            config.userContentController.addUserScript(WKUserScript(
+                source: Self.chatInputAboveOverlaysJS, injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true))
+            if !ProcessInfo.processInfo.isiOSAppOnMac {   // no on-screen keyboard on a Mac
+                config.userContentController.addUserScript(WKUserScript(
+                    source: Self.noPickerAutofocusJS, injectionTime: .atDocumentStart,
+                    forMainFrameOnly: true))
+            }
+        }
         if ProcessInfo.processInfo.isiOSAppOnMac {
             // WebKit derives the text input traits from the focused element, and
             // with autocorrect/suggestions on, the shortcuts bar shows predictions.
@@ -31,6 +41,17 @@ struct WebView: UIViewRepresentable {
                 source: Self.disableSuggestionsJS, injectionTime: .atDocumentStart,
                 forMainFrameOnly: false))
         }
+        #if DEBUG
+        if DebugServer.enabled {
+            config.userContentController.addUserScript(WKUserScript(
+                source: DebugServer.consoleHookJS, injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+            config.userContentController.addUserScript(WKUserScript(
+                source: DebugServer.focusTraceJS, injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+            config.userContentController.add(DebugLogHandler(), name: "debugLog")
+        }
+        #endif
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.scrollView.backgroundColor = .clear
@@ -54,7 +75,16 @@ struct WebView: UIViewRepresentable {
             // Likewise the iPad shortcuts bar (undo/redo/paste + predictions),
             // which spans the whole bottom of the screen on a Mac.
             webView.hideInputBars()
+        } else if fixedViewport {
+            // On a phone the prev/next/Done bar just eats chat height above the
+            // keyboard; the keyboard itself (and its shortcuts bar) stays.
+            webView.hideInputBars(accessoryOnly: true)
         }
+        #if DEBUG
+        // Chat only: the login sheet's webview would steal the target and then
+        // go away when the sheet closes.
+        if DebugServer.enabled, fixedViewport { DebugServer.shared.attach(webView) }
+        #endif
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -76,6 +106,110 @@ struct WebView: UIViewRepresentable {
       var script = document.createElement('script');
       script.src = 'https://cdn.betterttv.net/betterttv.js';
       (document.head || document.documentElement).appendChild(script);
+    })();
+    """
+
+    /// Popups anchored to the chat input (the emote picker) live in its
+    /// `z-index: 1` layer, so overlays in the message list — drop/sub banners,
+    /// pinned messages — painted over them and hid the picker's search bar.
+    /// Lift the whole input layer above the message list.
+    private static let chatInputAboveOverlaysJS = """
+    (function () {
+      if (!/(^|\\.)twitch\\.tv$/.test(location.hostname)) return;
+      var style = document.createElement('style');
+      style.textContent = '.chat-input { position: relative; z-index: 10; }';
+      (document.head || document.documentElement).appendChild(style);
+    })();
+    """
+
+    /// Emote pickers (Twitch's and BetterTTV's) focus the search box when they
+    /// open and the chat input when an emote is picked. On a phone that brings
+    /// up the keyboard, which collapses the video and resizes chat under the
+    /// picker (and BetterTTV closes its menu once focus leaves it). So right
+    /// after a tap, `focus()` on a field other than the one tapped is skipped;
+    /// any focus that still lands on such a field gets `inputmode="none"` (set
+    /// in capturing `focusin`, before WebKit reads the traits) — no keyboard.
+    /// Tapping the field drops that and refocuses it with the keyboard.
+    private static let noPickerAutofocusJS = """
+    (function () {
+      if (!/(^|\\.)twitch\\.tv$/.test(location.hostname)) return;
+      var marked = null;   // the field currently focused without a keyboard
+      var tapTarget = null, tapTime = 0;
+      var typingIn = null; // at the last tap, the field the keyboard was up for
+      // BetterTTV's emote menu uses a closed shadow root; opening it lets us see
+      // (via composedPath) which field inside gets focus. This opens every
+      // closed root on twitch.tv, but BetterTTV's is the only one on the page.
+      var attachShadow = Element.prototype.attachShadow;
+      Element.prototype.attachShadow = function (init) {
+        return attachShadow.call(this, Object.assign({}, init, { mode: 'open' }));
+      };
+      function target(e) { return e.composedPath ? e.composedPath()[0] : e.target; }
+      function editable(el) {
+        return el.isContentEditable || /^(INPUT|TEXTAREA)$/.test(el.tagName);
+      }
+      // The tap was on the field, inside it, or on a wrapper around it.
+      function tapped(el) {
+        return tapTarget && tapTarget.contains && (el.contains(tapTarget) || tapTarget.contains(el));
+      }
+      function unmark() {
+        if (marked) { marked.removeAttribute('inputmode'); marked = null; }
+      }
+      function deepActive() {
+        var a = document.activeElement;
+        while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement;
+        return a;
+      }
+      // Right after a tap elsewhere, unless it's the field the keyboard was
+      // already up for (e.g. Send refocusing the input mid-conversation).
+      function suppress(el) {
+        return el !== typingIn && tapTarget && Date.now() - tapTime < 1000 && !tapped(el);
+      }
+      // BetterTTV closes its menu after each emote unless Shift is held, which
+      // a phone can't do. Its keyup handler only records modifier state, so a
+      // synthetic Shift keyup around the tap keeps the menu open (and skips
+      // focusing the input); a plain keyup after the click resets it.
+      function bttvShift(el, down) {
+        el.dispatchEvent(new KeyboardEvent('keyup', {
+          key: 'Shift', shiftKey: down, bubbles: true, composed: true }));
+      }
+      function bttvEmote(el) {
+        return el.closest && el.closest('[class*="bttv-EmoteMenu-module__"]') &&
+          el.closest('[class*="bttv-Emote-module__"]');
+      }
+      document.addEventListener('click', function (e) {
+        var el = target(e);
+        if (bttvEmote(el)) setTimeout(function () { if (el.isConnected) bttvShift(el, false); }, 0);
+      }, true);
+      document.addEventListener('pointerdown', function (e) {
+        var active = deepActive();
+        typingIn = active && active.getAttribute && editable(active) && active !== marked ? active : null;
+        tapTarget = target(e); tapTime = Date.now();
+        if (bttvEmote(tapTarget)) bttvShift(tapTarget, true);
+        if (marked && tapped(marked)) {
+          // A real tap on the keyboard-less field: let this tap focus it normally.
+          var field = marked;
+          unmark();
+          field.blur();
+        }
+      }, true);
+      var focus = HTMLElement.prototype.focus;
+      HTMLElement.prototype.focus = function () {
+        if (editable(this) && suppress(this)) return;
+        return focus.apply(this, arguments);
+      };
+      document.addEventListener('focusin', function (e) {
+        var el = target(e);
+        if (!el.getAttribute || !editable(el) || el === marked) return;
+        if (el !== typingIn && !(tapped(el) && Date.now() - tapTime < 1000)) {
+          unmark();
+          el.setAttribute('inputmode', 'none');
+          marked = el;
+        }
+      }, true);
+      // Only for this focus: a later tap-less focus is judged afresh.
+      document.addEventListener('focusout', function (e) {
+        if (target(e) === marked) unmark();
+      }, true);
     })();
     """
 
@@ -148,10 +282,11 @@ private extension WKWebView {
     }
 
     /// Swap WebKit's private content view for a runtime subclass with no
-    /// `inputAccessoryView`, an empty `inputAssistantItem` and an empty
-    /// `inputView`. There's no public API to drop these bars.
-    func hideInputBars() {
-        WKWebView.patchFloatingAssistantPadding()
+    /// `inputAccessoryView` and — unless `accessoryOnly` — an empty
+    /// `inputAssistantItem` and an empty `inputView`. There's no public API to
+    /// drop these bars.
+    func hideInputBars(accessoryOnly: Bool = false) {
+        if !accessoryOnly { WKWebView.patchFloatingAssistantPadding() }
         guard let contentView = scrollView.subviews.first(where: {
             String(describing: type(of: $0)).hasPrefix("WKContent")
         }), let baseClass = object_getClass(contentView) else {
@@ -159,7 +294,7 @@ private extension WKWebView {
             return
         }
 
-        let name = "\(NSStringFromClass(baseClass))_NoInputBars"
+        let name = "\(NSStringFromClass(baseClass))_\(accessoryOnly ? "NoAccessory" : "NoInputBars")"
         var subclass: AnyClass? = NSClassFromString(name)
         if subclass == nil, let newClass = objc_allocateClassPair(baseClass, name, 0) {
             let noAccessory: @convention(block) (AnyObject) -> UIView? = { _ in nil }
@@ -169,11 +304,15 @@ private extension WKWebView {
             let emptyInput: @convention(block) (AnyObject) -> UIView? = { _ in
                 WKWebView.emptyInputView
             }
-            let overrides: [(Selector, AnyObject)] = [
-                (#selector(getter: UIResponder.inputView), emptyInput as AnyObject),
+            var overrides: [(Selector, AnyObject)] = [
                 (#selector(getter: UIResponder.inputAccessoryView), noAccessory as AnyObject),
-                (#selector(getter: UIResponder.inputAssistantItem), emptyAssistant as AnyObject),
             ]
+            if !accessoryOnly {
+                overrides += [
+                    (#selector(getter: UIResponder.inputView), emptyInput as AnyObject),
+                    (#selector(getter: UIResponder.inputAssistantItem), emptyAssistant as AnyObject),
+                ]
+            }
             for (sel, block) in overrides {
                 if let method = class_getInstanceMethod(UIView.self, sel) {
                     class_addMethod(newClass, sel, imp_implementationWithBlock(block),
