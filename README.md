@@ -10,16 +10,34 @@ This is **not** a web wrapper. It embeds CPython 3.14 (via
 Streamlink package, including its two C-extension dependencies (`lxml`, `pycryptodome`)
 cross-compiled for iOS.
 
-![screenshot](docs/screenshot.png)
+| Streams | Player | Mini player | Settings |
+| :---: | :---: | :---: | :---: |
+| ![Streams](docs/screenshots/browse.png) | ![Player](docs/screenshots/player.png) | ![Mini player](docs/screenshots/mini-player.png) | ![Settings](docs/screenshots/settings.png) |
+
+## Features
+
+- Play any stream Streamlink supports: saved streams list, Best / Audio-only / Auto
+  (adaptive) quality, and a quality picker on the player.
+- Full player with chat underneath, a draggable in-app mini player, and Picture in Picture.
+- Background audio, with optional drop to audio-only when the app leaves the foreground.
+- Lock screen / Control Center controls; Twitch streams show the stream title, game and
+  channel picture.
+- Twitch login (in-app, stays on-device) for subscriber quality and fewer ads, low-latency
+  mode, and BetterTTV/FFZ/7TV emotes in chat.
+- Caps Best/Auto at 720p on cellular (optional); auto-reconnects after drops.
 
 ## How it works
 
-```
-SwiftUI UI ──> PythonBridge (C API, JSON) ──> slbridge.py ──> Streamlink session
-     │                                                              │
-     │                                        resolves URL + headers (all plugins)
-     ▼                                                              ▼
-AVPlayer + AVAudioSession  <────────────  { "url": "...m3u8", "headers": {...} }
+```mermaid
+flowchart LR
+    UI["SwiftUI UI"] -- "resolve(url, quality)" --> Bridge["PythonBridge<br/>(CPython C API, JSON)"]
+    Bridge --> Py["slbridge.py"]
+    Py --> SL["Streamlink session<br/>(plugins, auth, HLS logic)"]
+    SL -- "playable URL + HTTP headers" --> Py
+    Py -- "JSON response" --> Bridge
+    Bridge --> UI
+    UI -- "load(url, headers)" --> Player["AVPlayer + AVAudioSession"]
+    Player -- "HLS segments" --> CDN[("Stream CDN")]
 ```
 
 - **Streamlink only resolves** the stream (its plugins, auth, HLS/DASH logic). It hands back a
@@ -62,7 +80,6 @@ libxml2 + libxslt for `lxml`) and **hosted**, not committed:
 make wheels       # cross-compile all 4 wheels -> vendor/wheels/ (+ manifest.txt, SHA256SUMS.txt)
 ```
 
-`make wheels` must run **outside a command sandbox** (autotools `./configure` mutates `PATH`).
 It produces device + simulator arm64 wheels for both packages.
 
 `make bootstrap` obtains the wheels in this priority:

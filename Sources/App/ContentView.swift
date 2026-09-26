@@ -49,7 +49,9 @@ struct ContentView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .sheet(isPresented: $showDiagnostics) { DiagnosticsView(diag: diag) }
         .onChange(of: controller.player.hasStream) { hasStream in
-            if hasStream { withAnimation(spring) { presentation = .full } }
+            // Test hook: launch with `--mini` to show a new stream in the mini player.
+            let mini = ProcessInfo.processInfo.arguments.contains("--mini")
+            if hasStream { withAnimation(spring) { presentation = mini ? .mini : .full } }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notif in
             // On macOS there's no on-screen keyboard to make room for, but the
