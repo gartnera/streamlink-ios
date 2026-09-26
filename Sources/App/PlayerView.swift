@@ -18,6 +18,9 @@ struct PlayerView: UIViewControllerRepresentable {
         controller.player = model.player
         controller.allowsPictureInPicturePlayback = true
         controller.canStartPictureInPictureAutomaticallyFromInline = true
+        // NowPlayingCenter owns the lock screen / Control Center info (with
+        // channel artwork); don't let AVKit overwrite it with its own.
+        controller.updatesNowPlayingInfoCenter = false
         controller.delegate = context.coordinator
 
         context.coordinator.controller = controller

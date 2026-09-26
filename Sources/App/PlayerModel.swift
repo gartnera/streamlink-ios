@@ -117,6 +117,13 @@ final class PlayerModel: ObservableObject {
         if !hasStream { hasStream = true }
     }
 
+    /// Replace the Now Playing metadata for the current stream (e.g. once richer
+    /// channel info has been fetched).
+    func updateNowPlaying(title: String, subtitle: String, artwork: UIImage?) {
+        guard hasStream else { return }
+        nowPlaying.update(title: title, subtitle: subtitle, artwork: artwork)
+    }
+
     /// Resume after the system (not the user) paused playback, e.g. AVKit pausing
     /// on lock — keep going from where we were rather than jumping to live.
     func resumeAfterSystemPause() {

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import MediaPlayer
 
 /// How the player is presented over the browse page.
 enum PlayerPresentation {
@@ -349,6 +350,7 @@ struct ContentView: View {
                 controller.player.load(sel, title: controller.nowPlayingTitle,
                                        subtitle: controller.pluginName ?? "Streamlink",
                                        adaptive: sel.name == "auto")
+                controller.refreshNowPlayingInfo(url: url, fallbackTitle: controller.nowPlayingTitle)
                 let pb = await probePlayback(sel)
                 out.merge(pb) { _, new in new }
                 out["qualities"] = controller.qualities
@@ -362,6 +364,11 @@ struct ContentView: View {
                     out["stalls"] = ev.numberOfStalls
                 }
                 out["label"] = controller.displayName(for: controller.selectedQuality)
+                let np = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+                out["now_playing_title"] = np[MPMediaItemPropertyTitle] as Any
+                out["now_playing_artist"] = np[MPMediaItemPropertyArtist] as Any
+                out["now_playing_artwork"] = (np[MPMediaItemPropertyArtwork] as? MPMediaItemArtwork)
+                    .map { "\(Int($0.bounds.width))x\(Int($0.bounds.height))" } as Any
             }
         } catch {
             out["ok"] = false

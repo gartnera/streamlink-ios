@@ -113,6 +113,7 @@ final class StreamController: ObservableObject {
         busy = true; defer { busy = false }
         status = "Resolving \(urlText)…"
         qualities = []; aliasTargets = [:]; pluginName = nil
+        channelInfo = nil   // re-fetch: the stream title/game may have changed
         do {
             let body = await requestBody([
                 "op": "streams", "url": urlText,
@@ -141,17 +142,20 @@ final class StreamController: ObservableObject {
         busy = true; defer { busy = false }
         selectedQuality = quality
         status = "Opening \(quality)…"
+        // Captured up front: the URL field is editable while we await below.
+        let url = urlText, title = nowPlayingTitle
         do {
-            let body = await requestBody(["op": "resolve", "url": urlText, "quality": quality])
+            let body = await requestBody(["op": "resolve", "url": url, "quality": quality])
             let r: ResolveResponse = try await PythonBridge.shared.request(
                 body, as: ResolveResponse.self)
             if r.ok, let sel = r.selected {
                 let audioOnly = quality.lowercased().contains("audio")
                 // Auto streams adapt inside AVPlayer, so let it apply the cellular cap.
                 let cap = sel.name == "auto" && capOnCellular ? CGSize(width: 1280, height: 720) : .zero
-                player.load(sel, title: nowPlayingTitle,
+                player.load(sel, title: title,
                             subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly,
                             adaptive: sel.name == "auto", maxResolutionOnCellular: cap)
+                refreshNowPlayingInfo(url: url, fallbackTitle: title)
                 status = "Playing \(sel.name)"
             } else {
                 status = "Cannot play: \(r.error ?? "unknown error")"
@@ -231,6 +235,40 @@ final class StreamController: ObservableObject {
         let t = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
         if let match = saved.first(where: { $0.url == t }) { return match.name }
         return Self.defaultName(for: t)
+    }
+
+    /// Twitch channel info for Now Playing, keyed by the stream URL it's for.
+    private var channelInfo: (url: String, info: TwitchMetadata.Info)?
+    private var channelInfoTask: Task<Void, Never>?
+    /// The stream URL whose info Now Playing should show (the one last loaded).
+    private var nowPlayingURL: String?
+
+    /// Show the channel's stream title, name/game and profile picture in Now
+    /// Playing for the just-loaded `url`. Cached info is applied right away (so
+    /// quality switches and reconnects keep it); a new channel is fetched and
+    /// applied on arrival. `fallbackTitle` is used when the channel is offline.
+    func refreshNowPlayingInfo(url: String, fallbackTitle: String) {
+        nowPlayingURL = url
+        if let cached = channelInfo, cached.url == url {
+            applyNowPlaying(cached.info, fallbackTitle: fallbackTitle)
+            return
+        }
+        channelInfoTask?.cancel()
+        guard let login = TwitchMetadata.channel(from: url) else { return }
+        channelInfoTask = Task { [weak self] in
+            guard let info = await TwitchMetadata.fetch(login: login), !Task.isCancelled,
+                  let self else { return }
+            channelInfo = (url, info)
+            // Another stream may have been loaded while this was in flight.
+            guard nowPlayingURL == url else { return }
+            applyNowPlaying(info, fallbackTitle: fallbackTitle)
+        }
+    }
+
+    private func applyNowPlaying(_ info: TwitchMetadata.Info, fallbackTitle: String) {
+        let subtitle = [info.displayName, info.game].compactMap { $0 }.joined(separator: " · ")
+        player.updateNowPlaying(title: info.title ?? fallbackTitle,
+                                subtitle: subtitle, artwork: info.artwork)
     }
 
     // MARK: - Chat

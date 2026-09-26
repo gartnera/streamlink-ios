@@ -1,7 +1,7 @@
 import AVFoundation
 import MediaPlayer
 
-/// Publishes Now Playing metadata (title/subtitle, live state, elapsed time) to
+/// Publishes Now Playing metadata (title/subtitle, artwork, live state, elapsed time) to
 /// Control Center and the lock screen, and wires the remote play/pause/stop
 /// commands back to the shared `AVPlayer` — so background playback shows info
 /// and is controllable from outside the app.
@@ -11,6 +11,7 @@ final class NowPlayingCenter {
     private var statusObservation: NSKeyValueObservation?
     private var title = ""
     private var subtitle = ""
+    private var artwork: MPMediaItemArtwork?
 
     init(player: AVPlayer) {
         self.player = player
@@ -31,13 +32,19 @@ final class NowPlayingCenter {
         statusObservation?.invalidate()
     }
 
-    func update(title: String, subtitle: String) {
+    func update(title: String, subtitle: String, artwork image: UIImage? = nil) {
         self.title = title
         self.subtitle = subtitle
+        artwork = image.map { image in
+            MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        }
         refresh()
     }
 
     func clear() {
+        title = ""
+        subtitle = ""
+        artwork = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
@@ -66,6 +73,7 @@ final class NowPlayingCenter {
         var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
         info[MPMediaItemPropertyTitle] = title
         info[MPMediaItemPropertyArtist] = subtitle
+        info[MPMediaItemPropertyArtwork] = artwork
 
         let duration = player.currentItem?.duration.seconds ?? .nan
         let isLive = !(duration.isFinite && duration > 0)
