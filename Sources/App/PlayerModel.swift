@@ -28,6 +28,10 @@ final class PlayerModel: ObservableObject {
     /// (the quality dropdown) can appear and hide with them. Set by `PlayerView`.
     @Published var controlsVisible = false
 
+    /// Height of the video actually being shown (e.g. 720), which for an
+    /// adaptive "auto" stream tells us which variant AVPlayer picked.
+    @Published private(set) var videoHeight: Int?
+
     /// Re-resolve the current stream fresh (new live-edge URL) and call `load`.
     var onReloadRequested: (() -> Void)?
 
@@ -42,6 +46,7 @@ final class PlayerModel: ObservableObject {
     private var rateObservation: NSKeyValueObservation?
     private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
+    private var presentationSizeObservation: NSKeyValueObservation?
     private var itemTokens: [NSObjectProtocol] = []
 
     private lazy var nowPlaying = NowPlayingCenter(player: player)
@@ -64,7 +69,10 @@ final class PlayerModel: ObservableObject {
 
     /// Load (or switch to) a stream. A no-op if it's already the current URL,
     /// otherwise the existing item is replaced so the old stream stops cleanly.
-    func load(_ stream: SelectedStream, title: String, subtitle: String, audioOnly: Bool = false) {
+    /// `maxResolutionOnCellular` caps adaptive (multivariant) streams on
+    /// expensive networks; `.zero` means no cap.
+    func load(_ stream: SelectedStream, title: String, subtitle: String, audioOnly: Bool = false,
+              maxResolutionOnCellular: CGSize = .zero) {
         guard currentURL != stream.url, let url = URL(string: stream.url) else { return }
         rebuilding = true
         defer { rebuilding = false }
@@ -79,6 +87,8 @@ final class PlayerModel: ObservableObject {
         }
         let asset = AVURLAsset(url: url, options: options)
         let item = AVPlayerItem(asset: asset)
+        item.preferredMaximumResolutionForExpensiveNetworks = maxResolutionOnCellular
+        videoHeight = nil
         observe(item)
         player.replaceCurrentItem(with: item)
         player.play()
@@ -97,6 +107,7 @@ final class PlayerModel: ObservableObject {
         nowPlaying.clear()
         currentURL = nil
         isAudioOnly = false
+        videoHeight = nil
         isReconnecting = false
         playbackFailed = false
         hasStream = false
@@ -146,6 +157,14 @@ final class PlayerModel: ObservableObject {
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             if item.status == .failed { self?.attemptReconnect() }
         }
+        presentationSizeObservation = item.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
+            let h = Int(item.presentationSize.height.rounded())
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let height = h > 0 ? h : nil
+                if self.videoHeight != height { self.videoHeight = height }
+            }
+        }
         let nc = NotificationCenter.default
         itemTokens = [
             nc.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { [weak self] _ in
@@ -165,6 +184,8 @@ final class PlayerModel: ObservableObject {
     private func clearItemObservers() {
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
+        presentationSizeObservation?.invalidate()
+        presentationSizeObservation = nil
         itemTokens.forEach { NotificationCenter.default.removeObserver($0) }
         itemTokens.removeAll()
     }

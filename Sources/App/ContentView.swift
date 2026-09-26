@@ -66,6 +66,8 @@ struct ContentView: View {
         }
         .task { await runDiagnostics() }
         .task { await maybeRunSmokeTest() }
+        // Test hook: launch with `--show-info` to open the Settings sheet.
+        .task { if ProcessInfo.processInfo.arguments.contains("--show-info") { showDiagnostics = true } }
     }
 
     // MARK: - Player overlay
@@ -325,10 +327,11 @@ struct ContentView: View {
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--smoke-url"), i + 1 < args.count else { return }
         let url = args[i + 1]
-        var out: [String: Any] = ["url": url]
+        let quality = args.firstIndex(of: "--smoke-quality").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "best"
+        var out: [String: Any] = ["url": url, "quality": quality]
         do {
             let r: ResolveResponse = try await PythonBridge.shared.request(
-                ["op": "resolve", "url": url, "quality": "best"], as: ResolveResponse.self)
+                ["op": "resolve", "url": url, "quality": quality], as: ResolveResponse.self)
             out["ok"] = r.ok
             out["error"] = r.error as Any
             out["selected_url"] = r.selected?.url as Any
@@ -337,15 +340,27 @@ struct ContentView: View {
                 controller.urlText = url
                 // Populate qualities so the on-screen UI matches a real session.
                 if let s: ResolveResponse = try? await PythonBridge.shared.request(
-                    ["op": "streams", "url": url], as: ResolveResponse.self), let list = s.streams {
+                    ["op": "streams", "url": url, "allow_auto": UserDefaults.standard.bool(forKey: "auto_quality")], as: ResolveResponse.self), let list = s.streams {
                     controller.qualities = list
                     controller.aliasTargets = s.aliases ?? [:]
                     controller.pluginName = s.plugin
                 }
+                controller.selectedQuality = sel.name
                 controller.player.load(sel, title: controller.nowPlayingTitle,
                                        subtitle: controller.pluginName ?? "Streamlink")
                 let pb = await probePlayback(sel)
                 out.merge(pb) { _, new in new }
+                out["qualities"] = controller.qualities
+                out["video_height"] = controller.player.videoHeight as Any
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                out["video_height_10s"] = controller.player.videoHeight as Any
+                if let ev = controller.player.player.currentItem?.accessLog()?.events.last {
+                    out["observed_kbps"] = Int(ev.observedBitrate / 1000)
+                    out["indicated_kbps"] = Int(ev.indicatedBitrate / 1000)
+                    out["switch_bitrate_kbps"] = Int(ev.switchBitrate / 1000)
+                    out["stalls"] = ev.numberOfStalls
+                }
+                out["label"] = controller.displayName(for: controller.selectedQuality)
             }
         } catch {
             out["ok"] = false
@@ -401,6 +416,7 @@ struct DiagnosticsView: View {
     @AppStorage("audio_only_in_background") private var audioOnlyInBackground = false
     @AppStorage("audio_only_on_resume") private var audioOnlyOnResume = false
     @AppStorage("cap_720_on_cellular") private var cap720OnCellular = true
+    @AppStorage("auto_quality") private var autoQuality = false
     @AppStorage("chat_betterttv") private var betterTTV = true
 
     var body: some View {
@@ -440,7 +456,7 @@ struct DiagnosticsView: View {
                     LabeledContent("Version", value: appVersion)
                 }
             }
-            .navigationTitle("Info")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -458,11 +474,12 @@ struct DiagnosticsView: View {
 
     private var accountSection: some View {
         Section {
-            HStack {
+            // A Label (like the buttons below) so the icons and text line up.
+            Label {
+                Text(loggedIn ? "Logged in to Twitch" : "Not logged in")
+            } icon: {
                 Image(systemName: loggedIn ? "checkmark.seal.fill" : "person.crop.circle")
                     .foregroundStyle(loggedIn ? .green : .secondary)
-                Text(loggedIn ? "Logged in to Twitch" : "Not logged in")
-                Spacer()
             }
             Button {
                 showLogin = true
@@ -483,31 +500,28 @@ struct DiagnosticsView: View {
         } header: {
             Text("Account")
         } footer: {
-            Text("Logging in enables subscriber quality and fewer ads on Twitch. Your login stays on-device.")
+            Text("Enables subscriber quality and fewer ads. Your login stays on-device.")
         }
     }
 
     private var playbackSection: some View {
-        Section {
-            Toggle("Twitch low latency", isOn: $lowLatency)
-            Toggle("Limit Best to 720p on cellular", isOn: $cap720OnCellular)
-            Toggle("Audio-only in background", isOn: $audioOnlyInBackground)
-            Toggle("Stay audio-only on resume", isOn: $audioOnlyOnResume)
+        Section("Playback") {
+            SettingToggle("Twitch low latency", "Reduces stream delay.", isOn: $lowLatency)
+            SettingToggle("Auto quality", "Best adapts to your connection.", isOn: $autoQuality)
+            SettingToggle("Limit to 720p on cellular", "Best/Auto open at 720p on mobile data.",
+                          isOn: $cap720OnCellular)
+            SettingToggle("Audio-only in background", "Drops video when you leave the app.",
+                          isOn: $audioOnlyInBackground)
+            SettingToggle("Stay audio-only on resume", "Pick a quality to turn video back on.",
+                          isOn: $audioOnlyOnResume)
                 .disabled(!audioOnlyInBackground)
-        } header: {
-            Text("Playback")
-        } footer: {
-            Text("Low latency reduces Twitch delay. Limit Best to 720p opens streams at 720p on mobile data; you can still pick a higher quality from the player. Audio-only in background drops video to save data when you leave the app. Stay audio-only on resume keeps it that way when you come back — pick a quality to turn video back on.")
         }
     }
 
     private var chatSection: some View {
-        Section {
-            Toggle("BetterTTV in chat", isOn: $betterTTV)
-        } header: {
-            Text("Chat")
-        } footer: {
-            Text("Loads BetterTTV from cdn.betterttv.net into Twitch chat for BTTV/FFZ/7TV emotes and chat features. Applies to the next stream you open.")
+        Section("Chat") {
+            SettingToggle("BetterTTV in chat", "BTTV/FFZ/7TV emotes, from cdn.betterttv.net.",
+                          isOn: $betterTTV)
         }
     }
 
@@ -515,5 +529,27 @@ struct DiagnosticsView: View {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         return "\(v) (\(b))"
+    }
+}
+
+/// A settings toggle with a one-line description under its title.
+private struct SettingToggle: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, _ detail: String, isOn: Binding<Bool>) {
+        self.title = title
+        self.detail = detail
+        self._isOn = isOn
+    }
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }

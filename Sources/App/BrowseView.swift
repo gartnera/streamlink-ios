@@ -10,6 +10,8 @@ struct BrowseView: View {
 
     /// Quick quality applied when tapping a saved stream or "Play".
     @AppStorage("quick_quality") private var quickQuality: String = "best"
+    /// With Auto quality on, "best" opens the adaptive stream instead.
+    @AppStorage("auto_quality") private var autoQuality = false
     @State private var newURL: String = ""
 
     private let quickOptions = ["best", "audio_only"]
@@ -39,10 +41,10 @@ struct BrowseView: View {
             Button {
                 showDiagnostics()
             } label: {
-                Image(systemName: "info.circle")
+                Image(systemName: "gearshape")
                     .font(.title2)
             }
-            .accessibilityLabel("Diagnostics")
+            .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
@@ -67,7 +69,7 @@ struct BrowseView: View {
             }
 
             Picker("Quick quality", selection: $quickQuality) {
-                Text("Best").tag("best")
+                Text(autoQuality ? "Auto" : "Best").tag("best")
                 Text("Audio").tag("audio_only")
             }
             .pickerStyle(.segmented)
@@ -134,7 +136,7 @@ struct BrowseView: View {
 
     private func label(for quality: String) -> String {
         switch quality {
-        case "best": return "Best"
+        case "best": return autoQuality ? "Auto" : "Best"
         case "audio_only": return "Audio"
         default: return quality
         }

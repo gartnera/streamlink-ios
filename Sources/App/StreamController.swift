@@ -112,7 +112,10 @@ final class StreamController: ObservableObject {
         status = "Resolving \(urlText)…"
         qualities = []; aliasTargets = [:]; pluginName = nil
         do {
-            let body = await requestBody(["op": "streams", "url": urlText])
+            let body = await requestBody([
+                "op": "streams", "url": urlText,
+                "allow_auto": UserDefaults.standard.bool(forKey: "auto_quality"),
+            ])
             let r: ResolveResponse = try await PythonBridge.shared.request(
                 body, as: ResolveResponse.self)
             if r.ok, let streams = r.streams, !streams.isEmpty {
@@ -142,8 +145,11 @@ final class StreamController: ObservableObject {
                 body, as: ResolveResponse.self)
             if r.ok, let sel = r.selected {
                 let audioOnly = quality.lowercased().contains("audio")
+                // Auto streams adapt inside AVPlayer, so let it apply the cellular cap.
+                let cap = sel.name == "auto" && capOnCellular ? CGSize(width: 1280, height: 720) : .zero
                 player.load(sel, title: nowPlayingTitle,
-                            subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly)
+                            subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly,
+                            maxResolutionOnCellular: cap)
                 status = "Playing \(sel.name)"
             } else {
                 status = "Cannot play: \(r.error ?? "unknown error")"
@@ -154,20 +160,30 @@ final class StreamController: ObservableObject {
     }
 
     /// Quick path from the streams page: switch URL, resolve, and play the
-    /// requested quality — falling back to `best` if that quality isn't offered.
-    /// On cellular, `best` is capped to 720p unless the user turned that off.
+    /// requested quality. `auto` and `best` are interchangeable — whichever the
+    /// stream offers (auto when it's adaptive HLS) — else the top quality.
+    /// On cellular, `best` is capped to 720p unless the user turned that off
+    /// (auto gets the same cap inside AVPlayer; see `play`).
     func open(url: String, quality: String) async {
         urlText = url
         guard await resolve() else { return }
-        var q = qualities.contains(quality)
-            ? quality
-            : (qualities.contains("best") ? "best" : (qualities.first ?? "best"))
-        if q == "best", NetworkMonitor.shared.isCellular,
-           UserDefaults.standard.object(forKey: "cap_720_on_cellular") as? Bool ?? true,
+        var q = quality
+        if !qualities.contains(q) {
+            if ["auto", "best"].contains(q), let top = ["auto", "best"].first(where: qualities.contains) {
+                q = top
+            } else {
+                q = qualities.first ?? "best"
+            }
+        }
+        if q == "best", NetworkMonitor.shared.isCellular, capOnCellular,
            let capped = cappedQuality(maxHeight: 720) {
             q = capped
         }
         await play(quality: q)
+    }
+
+    private var capOnCellular: Bool {
+        UserDefaults.standard.object(forKey: "cap_720_on_cellular") as? Bool ?? true
     }
 
     /// The highest quality at or below `maxHeight` (e.g. 720p60 for 720), or nil
@@ -186,9 +202,14 @@ final class StreamController: ObservableObject {
         return Int(digits)
     }
 
-    /// User-facing name for a quality ("best" → "Best (1080p60)", "audio_only" → "Audio only").
+    /// User-facing name for a quality ("best" → "Best (1080p60)", "auto" →
+    /// "Auto (720p60)" with what's playing now, "audio_only" → "Audio only").
     func displayName(for quality: String) -> String {
         switch quality {
+        case "auto":
+            // Match the playing height back to a quality name for its frame rate.
+            guard selectedQuality == "auto", let h = player.videoHeight else { return "Auto" }
+            return "Auto (\(qualities.first { Self.height(of: $0) == h } ?? "\(h)p"))"
         case "best":
             return aliasTargets["best"].map { "Best (\($0))" } ?? "Best"
         case "audio_only": return "Audio only"
