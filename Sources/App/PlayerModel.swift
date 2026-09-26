@@ -24,6 +24,10 @@ final class PlayerModel: ObservableObject {
     /// True once reconnection attempts are exhausted; the UI offers a Retry.
     @Published private(set) var playbackFailed = false
 
+    /// Mirrors whether AVKit's on-video controls are showing, so our own overlay
+    /// (the quality dropdown) can appear and hide with them. Set by `PlayerView`.
+    @Published var controlsVisible = false
+
     /// Re-resolve the current stream fresh (new live-edge URL) and call `load`.
     var onReloadRequested: (() -> Void)?
 

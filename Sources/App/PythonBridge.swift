@@ -78,7 +78,8 @@ struct ResolveResponse: Decodable {
     let ok: Bool
     let error: String?
     let plugin: String?
-    let streams: [String]?          // available quality names, best/worst first
+    let streams: [String]?          // available quality names: best, audio_only, then concrete best → worst
+    let aliases: [String: String]?  // alias → concrete quality, e.g. "best" → "1080p60"
     let selected: SelectedStream?
 }
 

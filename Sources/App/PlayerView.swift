@@ -23,6 +23,7 @@ struct PlayerView: UIViewControllerRepresentable {
         context.coordinator.controller = controller
         context.coordinator.model = model
         context.coordinator.observeAppLifecycle()
+        context.coordinator.trackControlsVisibility()
 
         model.player.play()
         return controller
@@ -47,7 +48,42 @@ struct PlayerView: UIViewControllerRepresentable {
                            name: UIApplication.willEnterForegroundNotification, object: nil)
         }
 
-        deinit { NotificationCenter.default.removeObserver(self) }
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+            controlsTimer?.invalidate()
+        }
+
+        // MARK: Controls visibility
+
+        private var controlsTimer: Timer?
+        private weak var controlsView: UIView?
+
+        /// AVKit has no public API for whether its inline controls are showing,
+        /// so poll its controls container (e.g. `AVMobileGlassControlsView` on
+        /// iOS 26), which is hidden whenever the controls fade out. If it can't
+        /// be found, report the controls as visible so our overlay stays usable.
+        func trackControlsVisibility() {
+            controlsTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                guard let self, let root = self.controller?.view else { return }
+                if self.controlsView?.isDescendant(of: root) != true {
+                    self.controlsView = Self.findControlsView(in: root)
+                }
+                let visible = self.controlsView.map { !$0.isHidden && $0.alpha > 0.01 } ?? true
+                if self.model?.controlsVisible != visible { self.model?.controlsVisible = visible }
+            }
+        }
+
+        /// Breadth-first, so the top-level container wins over nested *ControlsViews.
+        private static func findControlsView(in root: UIView) -> UIView? {
+            var queue = root.subviews
+            while !queue.isEmpty {
+                let view = queue.removeFirst()
+                let name = String(describing: type(of: view))
+                if name.hasPrefix("AV"), name.hasSuffix("ControlsView") { return view }
+                queue.append(contentsOf: view.subviews)
+            }
+            return nil
+        }
 
         @objc private func didEnterBackground() {
             // Give PiP a moment to claim the session; if it doesn't, detach the

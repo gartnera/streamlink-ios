@@ -3,7 +3,7 @@ import AVFoundation
 
 /// How the player is presented over the browse page.
 enum PlayerPresentation {
-    case full   // video + one-line quality + chat webview
+    case full   // video (with quality dropdown) + chat webview
     case mini   // small in-app PiP floating at the bottom
 }
 
@@ -97,13 +97,10 @@ struct ContentView: View {
 
         Group {
             if wide {
-                // Desktop / landscape: video + quality bar on the left, chat on the right.
+                // Desktop / landscape: video on the left, chat on the right.
                 HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        Color.clear.frame(height: max(0, geo.size.height - qualityBarHeight))   // video area
-                        qualityBar.frame(height: qualityBarHeight)
-                    }
-                    .frame(width: geo.size.width - chatColumnWidth(geo))
+                    Color.clear   // video area
+                        .frame(width: geo.size.width - chatColumnWidth(geo))
                     Divider()
                     ChatView(url: controller.chatURL)
                         .padding(.bottom, kbInset)
@@ -112,7 +109,6 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     if !videoHidden {
                         Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
-                        qualityBar
                     }
                     ChatView(url: controller.chatURL)
                 }
@@ -137,6 +133,18 @@ struct ContentView: View {
             .simultaneousGesture(pullDownGesture)
             .allowsHitTesting(!videoHidden)
             .id("sharedPlayer")
+
+        // Quality dropdown over the video. It shows and hides with AVKit's own
+        // controls, and stays up while a quality is loading.
+        if full, !videoHidden, !controller.qualities.isEmpty {
+            let menuShown = controller.player.controlsVisible || controller.busy
+            qualityMenu
+                .frame(width: frame.width, alignment: .center)
+                .offset(x: frame.minX, y: frame.minY + 10 + (full ? dragY : 0))
+                .opacity((menuShown ? 1 : 0) * chromeOpacity)
+                .allowsHitTesting(menuShown)
+                .animation(.easeInOut(duration: 0.2), value: menuShown)
+        }
 
         if presentation == .mini {
             // Audio-only streams have no video, so show artwork in the mini player
@@ -188,23 +196,32 @@ struct ContentView: View {
         }
     }
 
-    private var qualityBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(controller.qualities, id: \.self) { quality in
-                    QualityChip(
-                        title: quality,
-                        selected: quality == controller.selectedQuality,
-                        action: { Task { await controller.play(quality: quality) } }
-                    )
-                    .disabled(controller.busy)
+    private var qualityMenu: some View {
+        Menu {
+            Picker("Quality", selection: Binding(
+                get: { controller.selectedQuality },
+                set: { quality in Task { await controller.play(quality: quality) } }
+            )) {
+                ForEach(controller.qualities, id: \.self) { quality in   // best, audio_only, then best → worst
+                    Text(controller.displayName(for: quality)).tag(quality)
                 }
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
+        } label: {
+            HStack(spacing: 5) {
+                if controller.busy {
+                    ProgressView().controlSize(.mini).tint(.white)
+                }
+                Text(controller.displayName(for: controller.selectedQuality))
+                    .font(.footnote.weight(.semibold))
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.55), in: Capsule())
         }
-        .frame(maxWidth: .infinity)
-        .background(Color(.systemBackground))
+        .disabled(controller.busy)
     }
 
     private func miniCloseButton(_ geo: GeometryProxy, videoFrame: CGRect) -> some View {
@@ -225,9 +242,8 @@ struct ContentView: View {
         let w = geo.size.width
         switch presentation {
         case .full where isWide(geo):
-            // Fill the left column above the quality bar; AVKit letterboxes.
-            return CGRect(x: 0, y: 0, width: w - chatColumnWidth(geo),
-                          height: max(0, geo.size.height - qualityBarHeight))
+            // Fill the left column; AVKit letterboxes.
+            return CGRect(x: 0, y: 0, width: w - chatColumnWidth(geo), height: geo.size.height)
         case .full:
             return CGRect(x: 0, y: 0, width: w, height: (w * 9 / 16).rounded())
         case .mini:
@@ -245,8 +261,6 @@ struct ContentView: View {
     private func chatColumnWidth(_ geo: GeometryProxy) -> CGFloat {
         min(456, max(360, (geo.size.width * 0.36).rounded()))
     }
-
-    private let qualityBarHeight: CGFloat = 52
 
     /// 0 → not dragging, 1 → dragged far enough to collapse.
     private var dragProgress: CGFloat {
@@ -325,6 +339,7 @@ struct ContentView: View {
                 if let s: ResolveResponse = try? await PythonBridge.shared.request(
                     ["op": "streams", "url": url], as: ResolveResponse.self), let list = s.streams {
                     controller.qualities = list
+                    controller.aliasTargets = s.aliases ?? [:]
                     controller.pluginName = s.plugin
                 }
                 controller.player.load(sel, title: controller.nowPlayingTitle,
@@ -376,26 +391,6 @@ struct ContentView: View {
     }
 }
 
-/// A pill-shaped, tappable quality option that plays on tap.
-private struct QualityChip: View {
-    let title: String
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(selected ? Color.accentColor : Color(.secondarySystemBackground))
-                .foregroundStyle(selected ? Color.white : Color.primary)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 /// Runtime diagnostics, shown on demand rather than inline.
 struct DiagnosticsView: View {
     let diag: DiagResponse?
@@ -405,6 +400,7 @@ struct DiagnosticsView: View {
     @AppStorage("twitch_low_latency") private var lowLatency = false
     @AppStorage("audio_only_in_background") private var audioOnlyInBackground = false
     @AppStorage("audio_only_on_resume") private var audioOnlyOnResume = false
+    @AppStorage("cap_720_on_cellular") private var cap720OnCellular = true
     @AppStorage("chat_betterttv") private var betterTTV = true
 
     var body: some View {
@@ -494,13 +490,14 @@ struct DiagnosticsView: View {
     private var playbackSection: some View {
         Section {
             Toggle("Twitch low latency", isOn: $lowLatency)
+            Toggle("Limit Best to 720p on cellular", isOn: $cap720OnCellular)
             Toggle("Audio-only in background", isOn: $audioOnlyInBackground)
             Toggle("Stay audio-only on resume", isOn: $audioOnlyOnResume)
                 .disabled(!audioOnlyInBackground)
         } header: {
             Text("Playback")
         } footer: {
-            Text("Low latency reduces Twitch delay. Audio-only in background drops video to save data when you leave the app. Stay audio-only on resume keeps it that way when you come back — pick a quality to turn video back on.")
+            Text("Low latency reduces Twitch delay. Limit Best to 720p opens streams at 720p on mobile data; you can still pick a higher quality from the player. Audio-only in background drops video to save data when you leave the app. Stay audio-only on resume keeps it that way when you come back — pick a quality to turn video back on.")
         }
     }
 

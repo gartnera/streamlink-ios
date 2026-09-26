@@ -12,7 +12,7 @@ struct BrowseView: View {
     @AppStorage("quick_quality") private var quickQuality: String = "best"
     @State private var newURL: String = ""
 
-    private let quickOptions = ["best", "worst", "audio_only"]
+    private let quickOptions = ["best", "audio_only"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,8 +29,7 @@ struct BrowseView: View {
                 }
             }
             .listStyle(.insetGrouped)
-        }
-    }
+        }    }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -69,7 +68,6 @@ struct BrowseView: View {
 
             Picker("Quick quality", selection: $quickQuality) {
                 Text("Best").tag("best")
-                Text("Worst").tag("worst")
                 Text("Audio").tag("audio_only")
             }
             .pickerStyle(.segmented)
@@ -137,7 +135,6 @@ struct BrowseView: View {
     private func label(for quality: String) -> String {
         switch quality {
         case "best": return "Best"
-        case "worst": return "Worst"
         case "audio_only": return "Audio"
         default: return quality
         }

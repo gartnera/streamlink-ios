@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import sys
 import traceback
 
@@ -154,12 +155,33 @@ def _get_session():
     return _session
 
 
+_ALIASES = ("best", "worst", "best-unfiltered", "worst-unfiltered")
+
+
 def _quality_names(streams: dict) -> list[str]:
-    names = list(streams.keys())
-    # Surface the convenience aliases first.
-    front = [n for n in ("best", "worst") if n in names]
-    rest = [n for n in names if n not in ("best", "worst")]
-    return front + rest
+    """best, audio_only, then the rest highest → lowest by the numbers in their
+    names (1080p60, 720p60, 720p, 480p, …). The `worst` alias is left out —
+    nobody picks it on purpose."""
+    front = [n for n in ("best", "audio_only") if n in streams]
+    rest = [n for n in streams if n not in _ALIASES and n not in front]
+    numbered = [n for n in rest if re.search(r"\d", n)]
+    # Names without numbers (e.g. "high", "low") keep Streamlink's order,
+    # which is worst → best, so reverse it.
+    unnumbered = [n for n in reversed(rest) if n not in numbered]
+    numbered.sort(key=lambda n: [int(x) for x in re.findall(r"\d+", n)], reverse=True)
+    return front + numbered + unnumbered
+
+
+def _alias_targets(streams: dict) -> dict:
+    """Which concrete quality each alias points at, e.g. {"best": "1080p60"}."""
+    targets = {}
+    for alias in ("best",):
+        if alias in streams:
+            for name, stream in streams.items():
+                if name not in _ALIASES and stream is streams[alias]:
+                    targets[alias] = name
+                    break
+    return targets
 
 
 def _apply_twitch_auth(session, token) -> None:
@@ -196,7 +218,12 @@ def _streams(url: str, twitch_auth=None, options=None) -> dict:
     if not streams:
         return {"ok": False, "error": "no playable streams found for this URL"}
     plugin = _plugin_name(session, url)
-    return {"ok": True, "plugin": plugin, "streams": _quality_names(streams)}
+    return {
+        "ok": True,
+        "plugin": plugin,
+        "streams": _quality_names(streams),
+        "aliases": _alias_targets(streams),
+    }
 
 
 def _resolve(url: str, quality: str, twitch_auth=None, options=None) -> dict:

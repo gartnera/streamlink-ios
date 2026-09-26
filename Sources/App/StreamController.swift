@@ -17,7 +17,10 @@ final class StreamController: ObservableObject {
     let player = PlayerModel()
 
     @Published var urlText: String = "https://streamlink.github.io/"
+    /// Available qualities: `best`, `audio_only`, then concrete qualities best → worst.
     @Published var qualities: [String] = []
+    /// Alias → concrete quality for the current stream, e.g. "best" → "1080p60".
+    @Published var aliasTargets: [String: String] = [:]
     @Published var selectedQuality: String = "best"
     @Published var pluginName: String?
     @Published var status: String = ""
@@ -29,6 +32,7 @@ final class StreamController: ObservableObject {
 
     init() {
         loadSaved()
+        _ = NetworkMonitor.shared   // start monitoring before the first open()
         // Re-publish the nested player's changes so views observing the
         // controller update when playback state (e.g. hasStream) changes.
         player.objectWillChange
@@ -106,13 +110,14 @@ final class StreamController: ObservableObject {
     func resolve() async -> Bool {
         busy = true; defer { busy = false }
         status = "Resolving \(urlText)…"
-        qualities = []; pluginName = nil
+        qualities = []; aliasTargets = [:]; pluginName = nil
         do {
             let body = await requestBody(["op": "streams", "url": urlText])
             let r: ResolveResponse = try await PythonBridge.shared.request(
                 body, as: ResolveResponse.self)
             if r.ok, let streams = r.streams, !streams.isEmpty {
                 qualities = streams
+                aliasTargets = r.aliases ?? [:]
                 pluginName = r.plugin
                 selectedQuality = streams.contains("best") ? "best" : streams[0]
                 status = "Found \(streams.count) qualities."
@@ -150,13 +155,45 @@ final class StreamController: ObservableObject {
 
     /// Quick path from the streams page: switch URL, resolve, and play the
     /// requested quality — falling back to `best` if that quality isn't offered.
+    /// On cellular, `best` is capped to 720p unless the user turned that off.
     func open(url: String, quality: String) async {
         urlText = url
         guard await resolve() else { return }
-        let q = qualities.contains(quality)
+        var q = qualities.contains(quality)
             ? quality
             : (qualities.contains("best") ? "best" : (qualities.first ?? "best"))
+        if q == "best", NetworkMonitor.shared.isCellular,
+           UserDefaults.standard.object(forKey: "cap_720_on_cellular") as? Bool ?? true,
+           let capped = cappedQuality(maxHeight: 720) {
+            q = capped
+        }
         await play(quality: q)
+    }
+
+    /// The highest quality at or below `maxHeight` (e.g. 720p60 for 720), or nil
+    /// if `best` is already within the cap or the names don't encode a height.
+    func cappedQuality(maxHeight: Int) -> String? {
+        let best = aliasTargets["best"] ?? qualities.first { Self.height(of: $0) != nil }
+        guard let best, let bestHeight = Self.height(of: best), bestHeight > maxHeight else { return nil }
+        // `qualities` is ordered best → worst, so the first match is the highest.
+        return qualities.first { (Self.height(of: $0) ?? .max) <= maxHeight }
+    }
+
+    /// Vertical resolution encoded in a quality name ("720p60" → 720), if any.
+    static func height(of quality: String) -> Int? {
+        let digits = quality.prefix { $0.isNumber }
+        guard !digits.isEmpty, quality.dropFirst(digits.count).first == "p" else { return nil }
+        return Int(digits)
+    }
+
+    /// User-facing name for a quality ("best" → "Best (1080p60)", "audio_only" → "Audio only").
+    func displayName(for quality: String) -> String {
+        switch quality {
+        case "best":
+            return aliasTargets["best"].map { "Best (\($0))" } ?? "Best"
+        case "audio_only": return "Audio only"
+        default: return quality
+        }
     }
 
     func stop() { player.stop() }
