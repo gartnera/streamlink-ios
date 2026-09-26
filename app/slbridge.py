@@ -102,6 +102,8 @@ def handle(request_json: str) -> str:
                 _resolve(req["url"], req.get("quality", "best"),
                          req.get("twitch_auth"), req.get("options"))
             )
+        if op == "exec":
+            return json.dumps(_exec(req["code"]))
         return json.dumps({"ok": False, "error": f"unknown op: {op!r}"})
     except Exception as exc:  # noqa: BLE001
         return json.dumps({
@@ -132,6 +134,39 @@ def _diag() -> dict:
         "platform": f"{platform.system()} {platform.machine()}",
         "checks": checks,
     }
+
+
+_exec_ns: dict | None = None
+
+
+def _exec(code: str) -> dict:
+    """Run `code` like a REPL cell for the debug server: statements run in a
+    namespace that persists across calls (with `session` and `slbridge` in it),
+    and a trailing expression's repr is returned as `value`."""
+    import ast
+    import contextlib
+    import io
+
+    global _exec_ns
+    if _exec_ns is None:
+        _exec_ns = {"__name__": "__debug__", "slbridge": sys.modules[__name__],
+                    "session": _get_session()}
+    out = io.StringIO()
+    try:
+        tree = ast.parse(code, "<debug>", "exec")
+        last = None
+        if tree.body and isinstance(tree.body[-1], ast.Expr):
+            last = ast.Expression(tree.body.pop().value)
+        value = None
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            exec(compile(tree, "<debug>", "exec"), _exec_ns)
+            if last is not None:
+                value = eval(compile(last, "<debug>", "eval"), _exec_ns)
+                _exec_ns["_"] = value
+    except BaseException:  # noqa: BLE001  (SystemExit would otherwise kill the app)
+        return {"ok": False, "output": out.getvalue(), "error": traceback.format_exc()}
+    return {"ok": True, "output": out.getvalue(),
+            "value": None if value is None else repr(value)}
 
 
 def _crypto_version() -> str:

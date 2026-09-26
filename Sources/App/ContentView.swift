@@ -71,6 +71,9 @@ struct ContentView: View {
         .task { await maybeRunSmokeTest() }
         // Test hook: launch with `--show-info` to open the Settings sheet.
         .task { if ProcessInfo.processInfo.arguments.contains("--show-info") { showDiagnostics = true } }
+        #if DEBUG
+        .task { registerDebugHooks() }
+        #endif
     }
 
     // MARK: - Player overlay
@@ -322,6 +325,100 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Debug server
+
+    #if DEBUG
+    private static let debugActions = [
+        "open {url, quality?}", "play {quality}", "stop", "retry", "mini", "full",
+        "settings {show?}", "setting {key, value}", "save {url, name?}", "unsave {url}",
+    ]
+
+    /// Expose navigation + state to `DebugServer`, and start it if enabled
+    /// (`--debug-server` or Settings → Developer, which can also start it later).
+    private func registerDebugHooks() {
+        DebugServer.shared.app = .init(state: debugState, perform: debugAction)
+        if DebugServer.enabled { DebugServer.shared.start() }
+    }
+
+    private func debugState() -> [String: Any] {
+        let p = controller.player
+        let item = p.player.currentItem
+        var player: [String: Any] = [
+            "has_stream": p.hasStream, "audio_only": p.isAudioOnly, "reconnecting": p.isReconnecting,
+            "failed": p.playbackFailed, "controls_visible": p.controlsVisible,
+            "video_height": p.videoHeight as Any, "rate": p.player.rate,
+            "time_control": ["paused", "waiting", "playing"][p.player.timeControlStatus.rawValue],
+            "item_status": item.map { ["unknown", "ready", "failed"][$0.status.rawValue] } as Any,
+            "item_error": item?.error?.localizedDescription as Any,
+        ]
+        if let ev = item?.accessLog()?.events.last {
+            player["observed_kbps"] = Int(ev.observedBitrate / 1000)
+            player["indicated_kbps"] = Int(ev.indicatedBitrate / 1000)
+            player["stalls"] = ev.numberOfStalls
+        }
+        let settingKeys = ["quick_quality", "twitch_low_latency", "auto_quality", "cap_720_on_cellular",
+                           "audio_only_in_background", "audio_only_on_resume", "chat_betterttv"]
+        return [
+            "presentation": presentation == .full ? "full" : "mini",
+            "settings_shown": showDiagnostics,
+            "keyboard_visible": keyboardVisible,
+            "url": controller.urlText, "status": controller.status, "busy": controller.busy,
+            "plugin": controller.pluginName as Any, "qualities": controller.qualities,
+            "selected_quality": controller.selectedQuality,
+            "quality_label": controller.displayName(for: controller.selectedQuality),
+            "chat_url": controller.chatURL?.absoluteString as Any,
+            "chat_webview_url": DebugServer.shared.webViewURL as Any,
+            "saved": controller.saved.map { ["name": $0.name, "url": $0.url] },
+            "player": player,
+            "settings": Dictionary(uniqueKeysWithValues: settingKeys.map {
+                ($0, UserDefaults.standard.object(forKey: $0) ?? NSNull())
+            }),
+            "actions": Self.debugActions,
+        ]
+    }
+
+    private func debugAction(_ name: String, _ args: [String: Any]) async throws {
+        func arg(_ key: String) throws -> String {
+            guard let v = args[key] as? String, !v.isEmpty else { throw DebugServer.ActionError("missing \"\(key)\"") }
+            return v
+        }
+        switch name {
+        case "open":
+            showDiagnostics = false
+            await controller.open(url: try arg("url"), quality: args["quality"] as? String ?? "best")
+            if controller.player.hasStream { withAnimation(spring) { presentation = .full } }
+        case "play":
+            await controller.play(quality: try arg("quality"))
+        case "stop":
+            withAnimation(spring) { controller.stop() }
+        case "retry":
+            controller.player.retry()
+        case "mini", "full":
+            guard controller.player.hasStream else { throw DebugServer.ActionError("no stream playing") }
+            withAnimation(spring) { presentation = name == "mini" ? .mini : .full }
+        case "settings":
+            showDiagnostics = args["show"] as? Bool ?? true
+        case "setting":
+            let key = try arg("key")
+            if let value = args["value"], !(value is NSNull) {
+                UserDefaults.standard.set(value, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        case "save":
+            controller.add(url: try arg("url"), name: args["name"] as? String)
+        case "unsave":
+            let url = try arg("url")
+            guard let stream = controller.saved.first(where: { $0.url == url }) else {
+                throw DebugServer.ActionError("not saved: \(url)")
+            }
+            controller.remove(stream)
+        default:
+            throw DebugServer.ActionError("unknown action \"\(name)\"; one of: \(Self.debugActions.joined(separator: ", "))")
+        }
+    }
+    #endif
+
     // MARK: - Smoke test
 
     /// Headless smoke test: launch with `--smoke-url <URL>` to auto-resolve and
@@ -332,6 +429,11 @@ struct ContentView: View {
         let url = args[i + 1]
         let quality = args.firstIndex(of: "--smoke-quality").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "best"
         var out: [String: Any] = ["url": url, "quality": quality]
+        // The debug server's Python REPL op: state persists and the last expression is returned.
+        if let e = try? await PythonBridge.shared.request(
+            ["op": "exec", "code": "_smoke = 6 * 7\nprint('out')\n_smoke"], as: ExecResponse.self) {
+            out["python_exec"] = e.ok ? "\(e.output ?? "")\(e.value ?? "")" : e.error ?? "failed"
+        }
         do {
             let r: ResolveResponse = try await PythonBridge.shared.request(
                 ["op": "resolve", "url": url, "quality": quality], as: ResolveResponse.self)
@@ -428,6 +530,9 @@ struct DiagnosticsView: View {
     @AppStorage("cap_720_on_cellular") private var cap720OnCellular = true
     @AppStorage("auto_quality") private var autoQuality = false
     @AppStorage("chat_betterttv") private var betterTTV = true
+    #if DEBUG
+    @AppStorage(DebugServer.settingKey) private var debugServer = false
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -435,6 +540,9 @@ struct DiagnosticsView: View {
                 accountSection
                 playbackSection
                 chatSection
+                #if DEBUG
+                developerSection
+                #endif
                 if let diag {
                     Section("Runtime") {
                         LabeledContent("Python", value: diag.python ?? "?")
@@ -534,6 +642,39 @@ struct DiagnosticsView: View {
                           isOn: $betterTTV)
         }
     }
+
+    #if DEBUG
+    private var developerSection: some View {
+        Section {
+            SettingToggle("Debug server", "HTTP API into app internals, port \(DebugServer.port.rawValue).",
+                          isOn: $debugServer)
+                .onChange(of: debugServer) { on in
+                    if on {
+                        DebugServer.shared.start()
+                    } else if !DebugServer.launchEnabled {
+                        DebugServer.shared.stop()
+                    }
+                }
+            if debugServer || DebugServer.launchEnabled, !DebugServer.loopbackOnly {
+                let base = "http://\(DebugServer.addresses.first ?? "<device-ip>"):\(DebugServer.port.rawValue)"
+                LabeledContent("Address", value: base)
+                    .font(.caption.monospaced())
+                LabeledContent("Token", value: DebugServer.token)
+                    .font(.caption.monospaced())
+                Button {
+                    UIPasteboard.general.string = "curl -H 'X-Debug-Token: \(DebugServer.token)' \(base)/state"
+                } label: {
+                    Label("Copy curl command", systemImage: "doc.on.doc")
+                }
+            }
+        } header: {
+            Text("Developer")
+        } footer: {
+            Text(DebugServer.loopbackOnly ? "Listens on localhost only."
+                 : "Reachable from your local network with the token.")
+        }
+    }
+    #endif
 
     private var appVersion: String {
         let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"

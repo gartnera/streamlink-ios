@@ -62,6 +62,10 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        # The debug server (Debug builds only) listens on the local network on devices.
+        NSLocalNetworkUsageDescription: Lets development tools on your network connect to the debug server.
+        NSBonjourServices:
+          - _sldebug._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.agartner.streamlink

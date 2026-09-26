@@ -61,6 +61,13 @@ final class PythonBridge {
 
 // MARK: - Response models
 
+struct ExecResponse: Decodable {
+    let ok: Bool
+    let output: String?
+    let value: String?
+    let error: String?
+}
+
 struct DiagResponse: Decodable {
     let ok: Bool
     let python: String?
