@@ -117,6 +117,13 @@ final class PlayerModel: ObservableObject {
         if !hasStream { hasStream = true }
     }
 
+    /// Resume after the system (not the user) paused playback, e.g. AVKit pausing
+    /// on lock — keep going from where we were rather than jumping to live.
+    func resumeAfterSystemPause() {
+        pausedByUser = false
+        player.play()
+    }
+
     /// Called when video stops or starts being visible (app backgrounded without
     /// PiP, and back). For adaptive streams, cap the bitrate so AVPlayer switches
     /// to the audio-only variant, and lift the cap to switch back up.

@@ -46,6 +46,16 @@ struct PlayerView: UIViewControllerRepresentable {
                            name: UIApplication.didEnterBackgroundNotification, object: nil)
             nc.addObserver(self, selector: #selector(willEnterForeground),
                            name: UIApplication.willEnterForegroundNotification, object: nil)
+            nc.addObserver(self, selector: #selector(willLock),
+                           name: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil)
+        }
+
+        /// The device is locking (only posted with a passcode set), which arrives
+        /// just before backgrounding. PiP never starts on lock, so detach now —
+        /// before AVKit pauses the still-attached player.
+        @objc private func willLock() {
+            guard !pipActive, controller?.player != nil else { return }
+            controller?.player = nil
         }
 
         deinit {
@@ -96,15 +106,16 @@ struct PlayerView: UIViewControllerRepresentable {
         @objc private func didEnterBackground() {
             controlsTimer?.invalidate()
             controlsTimer = nil
-            // On lock (no PiP) AVKit pauses the still-attached player right away,
-            // so remember whether it was playing to resume after detaching.
+            // If the player is still attached when locking (no passcode, so no
+            // willLock), AVKit pauses it right away; remember whether it was
+            // playing to resume after detaching.
             let wasPlaying = (model?.player.rate ?? 0) > 0
             // Give PiP a moment to claim the session; if it doesn't, detach the
             // player so AVKit keeps audio playing instead of pausing on hide.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                 guard let self, !self.pipActive else { return }
                 self.controller?.player = nil
-                if wasPlaying { self.model?.player.play() }
+                if wasPlaying { self.model?.resumeAfterSystemPause() }
                 // No video visible: adaptive streams drop to audio-only.
                 self.model?.setBackgroundAudioOnly(true)
             }
