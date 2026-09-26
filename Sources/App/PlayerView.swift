@@ -113,7 +113,9 @@ struct PlayerView: UIViewControllerRepresentable {
             // Give PiP a moment to claim the session; if it doesn't, detach the
             // player so AVKit keeps audio playing instead of pausing on hide.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, !self.pipActive else { return }
+                // Skip if PiP took over, or the user already came back.
+                guard let self, !self.pipActive,
+                      UIApplication.shared.applicationState == .background else { return }
                 self.controller?.player = nil
                 if wasPlaying { self.model?.resumeAfterSystemPause() }
                 // No video visible: adaptive streams drop to audio-only.

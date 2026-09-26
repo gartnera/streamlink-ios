@@ -209,9 +209,13 @@ final class StreamController: ObservableObject {
     func displayName(for quality: String) -> String {
         switch quality {
         case "auto":
-            // Match the playing height back to a quality name for its frame rate.
+            // Match the playing height back to a quality name for its frame rate,
+            // unless several differ in it (e.g. 720p60 and 720p30). Variants like
+            // 720p60_alt / 720p60_portrait count as 720p60.
             guard selectedQuality == "auto", let h = player.videoHeight else { return "Auto" }
-            return "Auto (\(qualities.first { Self.height(of: $0) == h } ?? "\(h)p"))"
+            let names = Set(qualities.filter { Self.height(of: $0) == h }
+                .map { String($0.prefix { $0 != "_" }) })
+            return "Auto (\(names.count == 1 ? names.first! : "\(h)p"))"
         case "best":
             return aliasTargets["best"].map { "Best (\($0))" } ?? "Best"
         case "audio_only": return "Audio only"

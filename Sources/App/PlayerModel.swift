@@ -152,6 +152,8 @@ final class PlayerModel: ObservableObject {
         currentURL = nil
         isAudioOnly = false
         isAdaptive = false
+        // The PlayerView that would clear this on foreground goes away with the stream.
+        backgroundAudioOnly = false
         videoHeight = nil
         isReconnecting = false
         playbackFailed = false
