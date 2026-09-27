@@ -1,0 +1,331 @@
+import XCTest
+import Network
+
+/// Drives the app's UI interactively over HTTP, through XCUITest. It's one
+/// test that serves until `POST /shutdown`: `make ui-driver` (Simulator) or
+/// `make ui-driver-device` (device), both in the background.
+///
+///     curl localhost:8766/tree                   # elements on screen, with refs (e1, e2, …)
+///     curl -d e3 localhost:8766/tap              # tap a ref, an identifier/label, or "x,y"
+///     curl -d 'Settings' localhost:8766/tap
+///     curl -d 'hls://…' localhost:8766/type      # type into the focused field ("\n" = return)
+///     curl -d 'down' localhost:8766/swipe        # swipe the app, or "down <identifier/label>"
+///     curl -d 'e3 200,600' localhost:8766/drag   # press and drag from one point/ref to another
+///     curl localhost:8766/screenshot > s.png
+///     curl -d '--debug-server' localhost:8766/launch   # (re)launch with arguments; also /activate, /terminate
+///     curl -X POST localhost:8766/shutdown
+///
+/// Actions reply with the tree after the UI settles. `?app=<bundle id>` targets
+/// another installed app (e.g. `com.apple.Preferences`), and `?app=springboard`
+/// the home screen and system alerts.
+///
+/// The Simulator shares the Mac's network, so there it listens on loopback
+/// only. On a device it listens on all interfaces; `make ui-driver-device`
+/// prints its CoreDevice tunnel URL (works over Wi-Fi) and a token that
+/// requests from off the device must send as `-H "X-Driver-Token: …"`.
+final class UIDriver: XCTestCase {
+    static let port: NWEndpoint.Port = 8766
+    static let bundleID = "com.agartner.streamlink"
+
+    private let netQueue = DispatchQueue(label: "uidriver.net")
+    private let lock = NSLock()
+    private var jobs: [(request: Request, conn: NWConnection)] = []
+    /// Open connections (guarded by `lock`), closed on shutdown.
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var serving = true
+    /// Frames from the last tree, by ref.
+    private var refs: [String: CGRect] = [:]
+    /// XCUITest failures raised by the current request, reported to the client
+    /// instead of failing the test.
+    private var issues: [String] = []
+    private let token = ProcessInfo.processInfo.environment["UIDRIVER_TOKEN"]
+
+    override func record(_ issue: XCTIssue) {
+        issues.append(issue.compactDescription)
+    }
+
+    func testServe() throws {
+        continueAfterFailure = true
+        let listener: NWListener
+        #if targetEnvironment(simulator)
+        let params = NWParameters.tcp
+        params.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: Self.port)
+        listener = try NWListener(using: params)
+        #else
+        listener = try NWListener(using: .tcp, on: Self.port)
+        if token == nil { print("[uidriver] no UIDRIVER_TOKEN: only on-device clients accepted") }
+        #endif
+        listener.newConnectionHandler = { [weak self] conn in
+            guard let self else { return }
+            let id = ObjectIdentifier(conn)
+            self.lock.lock()
+            self.connections[id] = conn
+            self.lock.unlock()
+            conn.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .cancelled, .failed:
+                    self?.lock.lock()
+                    self?.connections[id] = nil
+                    self?.lock.unlock()
+                default: break
+                }
+            }
+            conn.start(queue: self.netQueue)
+            self.receive(conn, Data())
+        }
+        listener.start(queue: netQueue)
+        print("[uidriver] serving on port \(Self.port.rawValue)")
+
+        // XCUITest calls must run on the main thread, one at a time, so requests
+        // queue here rather than on the main queue (where they could interleave
+        // while XCUITest spins the run loop).
+        while serving {
+            lock.lock()
+            let job = jobs.isEmpty ? nil : jobs.removeFirst()
+            lock.unlock()
+            if let job {
+                Self.respond(job.conn, handle(job.request))
+            } else {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
+        }
+
+        // Shut down: drop queued requests, let replies in flight (e.g. /shutdown's)
+        // finish sending, then close whatever is left.
+        listener.cancel()
+        lock.lock()
+        let queued = jobs.map(\.conn)
+        jobs.removeAll()
+        lock.unlock()
+        queued.forEach { $0.cancel() }
+        let deadline = Date(timeIntervalSinceNow: 0.5)
+        while Date() < deadline {
+            lock.lock()
+            let allClosed = connections.isEmpty
+            lock.unlock()
+            if allClosed { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+        lock.lock()
+        let remaining = Array(connections.values)
+        lock.unlock()
+        remaining.forEach { $0.cancel() }
+    }
+
+    // MARK: - Routes
+
+    private func handle(_ request: Request) -> (Int, Data, String) {
+        let bundleID = request.query["app"].map { $0 == "springboard" ? "com.apple.springboard" : $0 } ?? Self.bundleID
+        let target = XCUIApplication(bundleIdentifier: bundleID)
+        let body = request.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        issues = []
+        var acted = true
+        switch (request.method, request.path) {
+        case ("GET", "/tree"):
+            acted = false
+        case ("POST", "/tap"):
+            guard let point = locate(body, in: target) else { return notFound(body) }
+            point.tap()
+        case ("POST", "/type"):
+            target.typeText(request.body)   // untrimmed: a trailing "\n" presses return
+        case ("POST", "/swipe"):
+            var words = body.split(separator: " ").map(String.init)
+            guard let direction = words.first else { return text(400, "direction required\n") }
+            words.removeFirst()
+            let element = words.isEmpty ? target : element(words.joined(separator: " "), in: target)
+            switch direction {
+            case "up": element.swipeUp()
+            case "down": element.swipeDown()
+            case "left": element.swipeLeft()
+            case "right": element.swipeRight()
+            default: return text(400, "direction: up, down, left or right\n")
+            }
+        case ("POST", "/drag"):
+            let words = body.split(separator: " ").map(String.init)
+            guard words.count >= 2, let from = locate(words[0], in: target), let to = locate(words[1], in: target) else {
+                return text(400, "usage: <from> <to> [hold seconds]\n")
+            }
+            from.press(forDuration: words.count > 2 ? Double(words[2]) ?? 0.05 : 0.05, thenDragTo: to)
+        case ("POST", "/launch"):
+            target.launchArguments = body.split(separator: " ").map(String.init)
+            target.launch()
+        case ("POST", "/activate"):
+            target.activate()
+        case ("POST", "/terminate"):
+            target.terminate()
+            return text(200, "terminated\n")
+        case ("GET", "/screenshot"):
+            return (200, XCUIScreen.main.screenshot().pngRepresentation, "image/png")
+        case ("POST", "/shutdown"):
+            serving = false
+            return text(200, "bye\n")
+        default:
+            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /launch /activate /terminate /shutdown\n")
+        }
+        if acted {
+            let settle = request.query["settle"].flatMap(Double.init) ?? 0.5
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: settle))
+        }
+        let failures = issues.isEmpty ? "" : issues.map { "! \($0)\n" }.joined()
+        return text(issues.isEmpty ? 200 : 500, failures + tree(target))
+    }
+
+    /// One line per meaningful element, indented under its meaningful ancestors:
+    /// `e4 button "Settings" #id =value @x,y wxh`.
+    private func tree(_ app: XCUIApplication) -> String {
+        guard app.state == .runningForeground else {
+            return "app not in the foreground (state \(app.state.rawValue)); POST /launch or /activate\n"
+        }
+        let snapshot: XCUIElementSnapshot
+        do { snapshot = try app.snapshot() } catch { return "snapshot failed: \(error.localizedDescription)\n" }
+        let screen = snapshot.frame
+        refs = [:]
+        var lines: [String] = []
+        func visit(_ node: XCUIElementSnapshot, depth: Int) {
+            let value = (node.value as? String) ?? (node.value as? NSNumber)?.stringValue ?? ""
+            let meaningful = !node.label.isEmpty || !node.identifier.isEmpty || !value.isEmpty
+                || Self.interactive.contains(node.elementType)
+            let f = node.frame
+            var childDepth = depth
+            if meaningful, f.width > 0, f.height > 0, f.intersects(screen) {
+                let ref = "e\(refs.count + 1)"
+                refs[ref] = f
+                var line = String(repeating: "  ", count: depth) + "\(ref) \(Self.name(node.elementType))"
+                if !node.label.isEmpty { line += " \"\(node.label)\"" }
+                if !node.identifier.isEmpty, node.identifier != node.label { line += " #\(node.identifier)" }
+                if !value.isEmpty, value != node.label { line += " =\(value)" }
+                line += " @\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))"
+                if !node.isEnabled { line += " disabled" }
+                if node.isSelected { line += " selected" }
+                lines.append(line)
+                childDepth += 1
+            }
+            node.children.forEach { visit($0, depth: childDepth) }
+        }
+        visit(snapshot, depth: 0)
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// A ref from the last tree, "x,y" in points, or an identifier/label.
+    private func locate(_ query: String, in app: XCUIApplication) -> XCUICoordinate? {
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        if let frame = refs[query] {
+            return origin.withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+        }
+        let xy = query.split(separator: ",").compactMap { Double($0) }
+        if xy.count == 2 {
+            return origin.withOffset(CGVector(dx: xy[0], dy: xy[1]))
+        }
+        let match = element(query, in: app)
+        return match.exists ? match.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)) : nil
+    }
+
+    /// Exact identifier/label match, else a case-insensitive label substring.
+    private func element(_ query: String, in app: XCUIApplication) -> XCUIElement {
+        let all = app.descendants(matching: .any)
+        let exact = all.matching(NSPredicate(format: "identifier == %@ OR label == %@", query, query)).firstMatch
+        return exact.exists ? exact : all.matching(NSPredicate(format: "label CONTAINS[c] %@", query)).firstMatch
+    }
+
+    private func notFound(_ query: String) -> (Int, Data, String) {
+        text(404, "no element matches \"\(query)\" (refs come from the last /tree)\n")
+    }
+
+    private func text(_ status: Int, _ body: String) -> (Int, Data, String) {
+        (status, Data(body.utf8), "text/plain; charset=utf-8")
+    }
+
+    private static let interactive: Set<XCUIElement.ElementType> = [
+        .button, .textField, .secureTextField, .searchField, .textView, .switch, .toggle,
+        .slider, .stepper, .link, .cell, .segmentedControl, .picker, .menuItem, .tab,
+    ]
+
+    private static func name(_ type: XCUIElement.ElementType) -> String {
+        let names: [XCUIElement.ElementType: String] = [
+            .any: "any", .other: "other", .application: "app", .window: "window", .alert: "alert",
+            .button: "button", .navigationBar: "navbar", .tabBar: "tabbar", .toolbar: "toolbar",
+            .staticText: "text", .textField: "textfield", .secureTextField: "securefield",
+            .searchField: "searchfield", .textView: "textview", .switch: "switch", .toggle: "toggle",
+            .slider: "slider", .stepper: "stepper", .link: "link", .image: "image", .icon: "icon",
+            .cell: "cell", .table: "table", .collectionView: "collection", .scrollView: "scroll",
+            .segmentedControl: "segmented", .picker: "picker", .menu: "menu", .menuItem: "menuitem",
+            .webView: "webview", .sheet: "sheet", .keyboard: "keyboard", .key: "key", .tab: "tab",
+        ]
+        return names[type] ?? "type\(type.rawValue)"
+    }
+
+    // MARK: - HTTP
+
+    private struct Request {
+        let method: String
+        let path: String
+        let query: [String: String]
+        let headers: [String: String]   // lowercased names
+        let body: String
+    }
+
+    private func receive(_ conn: NWConnection, _ buffer: Data) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
+            guard let self else { return }
+            var buffer = buffer
+            if let data { buffer.append(data) }
+            if let request = Self.parse(buffer) {
+                guard self.authorized(request, conn) else {
+                    return Self.respond(conn, (403, Data("forbidden\n".utf8), "text/plain"))
+                }
+                self.lock.lock()
+                self.jobs.append((request, conn))
+                self.lock.unlock()
+            } else if done || error != nil {
+                conn.cancel()
+            } else {
+                self.receive(conn, buffer)
+            }
+        }
+    }
+
+    /// Browsers send Origin (and a foreign Host under DNS rebinding); curl sends
+    /// neither. Clients off the device also need the token.
+    private func authorized(_ request: Request, _ conn: NWConnection) -> Bool {
+        guard request.headers["origin"] == nil else { return false }
+        if case .hostPort(let host, _) = conn.endpoint, Self.isLoopback(host) {
+            let name = request.headers["host"]?.split(separator: ":").first.map(String.init)
+            return name == "localhost" || name == "127.0.0.1"
+        }
+        return token != nil && request.headers["x-driver-token"] == token
+    }
+
+    private static func isLoopback(_ host: NWEndpoint.Host) -> Bool {
+        switch host {
+        case .ipv4(let address): return address.isLoopback
+        case .ipv6(let address): return address.isLoopback || address.asIPv4?.isLoopback == true
+        default: return false
+        }
+    }
+
+    private static func parse(_ data: Data) -> Request? {
+        guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)),
+              let head = String(data: data[..<headerEnd.lowerBound], encoding: .utf8) else { return nil }
+        let lines = head.components(separatedBy: "\r\n")
+        let parts = lines.first?.split(separator: " ") ?? []
+        guard parts.count >= 2 else { return nil }
+        var headers: [String: String] = [:]
+        for line in lines.dropFirst() {
+            let kv = line.split(separator: ":", maxSplits: 1)
+            if kv.count == 2 { headers[kv[0].lowercased()] = kv[1].trimmingCharacters(in: .whitespaces) }
+        }
+        let length = headers["content-length"].flatMap(Int.init) ?? 0
+        let body = data[headerEnd.upperBound...]
+        guard body.count >= length else { return nil }
+        let url = URLComponents(string: String(parts[1]))
+        let query = Dictionary((url?.queryItems ?? []).map { ($0.name, $0.value ?? "") }) { _, last in last }
+        return Request(method: String(parts[0]), path: url?.path ?? String(parts[1]), query: query,
+                       headers: headers, body: String(decoding: body.prefix(length), as: UTF8.self))
+    }
+
+    private static func respond(_ conn: NWConnection, _ response: (Int, Data, String)) {
+        let (status, payload, type) = response
+        let head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Error")\r\nContent-Type: \(type)\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
+        conn.send(content: Data(head.utf8) + payload, completion: .contentProcessed { _ in conn.cancel() })
+    }
+}

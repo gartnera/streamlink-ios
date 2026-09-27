@@ -13,6 +13,8 @@ Every change goes through these steps in order. Don't skip ahead.
      or the script may print a stale file from a previous run.
    - App internals (state, navigation, Python, chat JS, logs): launch with
      `--debug-server` and use the HTTP API in `Sources/App/DebugServer.swift`.
+   - Driving the UI (tree, tap, type, drag): `make ui-driver` in the background,
+     then the HTTP API in `UIDriver/UIDriver.swift`.
    - When adding behavior, extend the smoke test in `ContentView.maybeRunSmokeTest`
      to record something that proves it works.
    - Don't drive the Simulator with synthetic mouse clicks; it takes over the
