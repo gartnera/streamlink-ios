@@ -12,6 +12,7 @@ import Network
 ///     curl -d 'down' localhost:8766/swipe        # swipe the app, or "down <identifier/label>"
 ///     curl -d 'e3 200,600' localhost:8766/drag   # press and drag from one point/ref to another
 ///     curl -d e3 'localhost:8766/press?seconds=1.5'   # long-press (default 1 s); skips the idle waits
+///     curl -d home localhost:8766/button         # press home (wakes the screen), or "lock"
 ///     curl localhost:8766/screenshot > s.png
 ///     curl -d '--debug-server' localhost:8766/launch   # (re)launch with arguments; also /activate, /terminate
 ///     curl -X POST localhost:8766/shutdown
@@ -177,6 +178,16 @@ final class UIDriver: XCTestCase {
         case ("POST", "/press"):
             guard let point = locate(body, in: target) else { return notFound(body) }
             point.press(forDuration: request.query["seconds"].flatMap(Double.init) ?? 1)
+        case ("POST", "/button"):
+            switch body {
+            case "home": XCUIDevice.shared.press(.home)   // also wakes the screen
+            case "lock":
+                // Private, as WebDriverAgent uses it; toggles the screen like the side button.
+                let press = NSSelectorFromString("pressLockButton")
+                guard XCUIDevice.shared.responds(to: press) else { return text(501, "pressLockButton unavailable\n") }
+                XCUIDevice.shared.perform(press)
+            default: return text(400, "button: home or lock\n")
+            }
         case ("POST", "/launch"):
             target.launchArguments = body.split(separator: " ").map(String.init)
             target.launch()
@@ -191,7 +202,7 @@ final class UIDriver: XCTestCase {
             serving = false
             return text(200, "bye\n")
         default:
-            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /press /launch /activate /terminate /shutdown\n")
+            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /press /button /launch /activate /terminate /shutdown\n")
         }
         if acted {
             let settle = request.query["settle"].flatMap(Double.init) ?? 0.5
@@ -216,9 +227,11 @@ final class UIDriver: XCTestCase {
             let value = (node.value as? String) ?? (node.value as? NSNumber)?.stringValue ?? ""
             let meaningful = !node.label.isEmpty || !node.identifier.isEmpty || !value.isEmpty
                 || Self.interactive.contains(node.elementType)
-            let f = node.frame
+            // The on-screen part, so refs tap what's visible; also makes the lock
+            // screen's infinite frames finite.
+            let f = node.frame.intersection(screen)
             var childDepth = depth
-            if meaningful, f.width > 0, f.height > 0, f.intersects(screen) {
+            if meaningful, f.width > 0, f.height > 0, !f.isInfinite {
                 let ref = "e\(refs.count + 1)"
                 refs[ref] = f
                 var line = String(repeating: "  ", count: depth) + "\(ref) \(Self.name(node.elementType))"
