@@ -11,6 +11,7 @@ import Network
 ///     curl -d 'hls://…' localhost:8766/type      # type into the focused field ("\n" = return)
 ///     curl -d 'down' localhost:8766/swipe        # swipe the app, or "down <identifier/label>"
 ///     curl -d 'e3 200,600' localhost:8766/drag   # press and drag from one point/ref to another
+///     curl -d e3 'localhost:8766/press?seconds=1.5'   # long-press (default 1 s); skips the idle waits
 ///     curl localhost:8766/screenshot > s.png
 ///     curl -d '--debug-server' localhost:8766/launch   # (re)launch with arguments; also /activate, /terminate
 ///     curl -X POST localhost:8766/shutdown
@@ -18,6 +19,11 @@ import Network
 /// Actions reply with the tree after the UI settles. `?app=<bundle id>` targets
 /// another installed app (e.g. `com.apple.Preferences`), and `?app=springboard`
 /// the home screen and system alerts.
+///
+/// XCUITest waits for the app to go idle before and after each event, and an
+/// open context menu never does, so each wait runs to its one-minute timeout.
+/// `/press` skips those waits; `?idle=0` skips them for any other action (e.g.
+/// tapping an item in the menu `/press` opened).
 ///
 /// The Simulator shares the Mac's network, so there it listens on loopback
 /// only. On a device it listens on all interfaces; `make ui-driver-device`
@@ -44,8 +50,28 @@ final class UIDriver: XCTestCase {
         issues.append(issue.compactDescription)
     }
 
+    /// Read by the idle-wait hook; set per request.
+    private static var skipIdleWait = false
+
+    /// Makes XCUITest's idle wait (private, the hook WebDriverAgent uses too)
+    /// a no-op while `skipIdleWait` is set.
+    private static let idleWaitHook: Void = {
+        let selector = NSSelectorFromString("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:")
+        guard let cls = NSClassFromString("XCUIApplicationProcess"),
+              let method = class_getInstanceMethod(cls, selector) else {
+            return print("[uidriver] idle-wait hook not found; /press and ?idle=0 will still wait")
+        }
+        typealias Wait = @convention(c) (AnyObject, Selector, Bool, Bool) -> Void
+        let original = unsafeBitCast(method_getImplementation(method), to: Wait.self)
+        let hook: @convention(block) (AnyObject, Bool, Bool) -> Void = { process, animations, preEvent in
+            if !skipIdleWait { original(process, selector, animations, preEvent) }
+        }
+        method_setImplementation(method, imp_implementationWithBlock(hook))
+    }()
+
     func testServe() throws {
         continueAfterFailure = true
+        Self.idleWaitHook
         let listener: NWListener
         #if targetEnvironment(simulator)
         let params = NWParameters.tcp
@@ -119,6 +145,8 @@ final class UIDriver: XCTestCase {
         let target = XCUIApplication(bundleIdentifier: bundleID)
         let body = request.body.trimmingCharacters(in: .whitespacesAndNewlines)
         issues = []
+        Self.skipIdleWait = request.path == "/press" || request.query["idle"] == "0"
+        defer { Self.skipIdleWait = false }
         var acted = true
         switch (request.method, request.path) {
         case ("GET", "/tree"):
@@ -146,6 +174,9 @@ final class UIDriver: XCTestCase {
                 return text(400, "usage: <from> <to> [hold seconds]\n")
             }
             from.press(forDuration: words.count > 2 ? Double(words[2]) ?? 0.05 : 0.05, thenDragTo: to)
+        case ("POST", "/press"):
+            guard let point = locate(body, in: target) else { return notFound(body) }
+            point.press(forDuration: request.query["seconds"].flatMap(Double.init) ?? 1)
         case ("POST", "/launch"):
             target.launchArguments = body.split(separator: " ").map(String.init)
             target.launch()
@@ -160,7 +191,7 @@ final class UIDriver: XCTestCase {
             serving = false
             return text(200, "bye\n")
         default:
-            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /launch /activate /terminate /shutdown\n")
+            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /press /launch /activate /terminate /shutdown\n")
         }
         if acted {
             let settle = request.query["settle"].flatMap(Double.init) ?? 0.5
