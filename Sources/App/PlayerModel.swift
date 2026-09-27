@@ -54,7 +54,7 @@ final class PlayerModel: ObservableObject {
     private var itemStatusObservation: NSKeyValueObservation?
     private var presentationSizeObservation: NSKeyValueObservation?
     /// Retained here: AVAssetResourceLoader holds its delegate weakly.
-    private var playlistLoader: MultivariantPlaylistLoader?
+    private var playlistLoader: HLSPlaylistLoader?
     private var itemTokens: [NSObjectProtocol] = []
 
     private lazy var nowPlaying = NowPlayingCenter(player: player)
@@ -78,9 +78,10 @@ final class PlayerModel: ObservableObject {
     /// Load (or switch to) a stream. A no-op if it's already the current URL,
     /// otherwise the existing item is replaced so the old stream stops cleanly.
     /// `maxResolutionOnCellular` caps adaptive (multivariant) streams on
-    /// expensive networks; `.zero` means no cap.
+    /// expensive networks; `.zero` means no cap. `lowLatency` plays live streams
+    /// closer to the live edge (see `lowLatencyOffset`).
     func load(_ stream: SelectedStream, title: String, subtitle: String, audioOnly: Bool = false,
-              adaptive: Bool = false, maxResolutionOnCellular: CGSize = .zero) {
+              adaptive: Bool = false, maxResolutionOnCellular: CGSize = .zero, lowLatency: Bool = false) {
         guard currentURL != stream.url, let url = URL(string: stream.url) else { return }
         rebuilding = true
         defer { rebuilding = false }
@@ -93,13 +94,16 @@ final class PlayerModel: ObservableObject {
         if !stream.headers.isEmpty {
             options["AVURLAssetHTTPHeaderFieldsKey"] = stream.headers
         }
-        // Adaptive streams load their master playlist through our rewriter so the
-        // audio-only variant is selectable in the background.
-        let rewrite = adaptive
-        let assetURL = rewrite ? (MultivariantPlaylistLoader.assetURL(for: url) ?? url) : url
+        // Playlists go through our rewriter: adaptive streams' master playlist so
+        // the audio-only variant is selectable in the background, and in low
+        // latency mode the media playlists too (see HLSPlaylistLoader).
+        // Not e.g. Twitch clips, which are plain MP4s.
+        let lowLatency = lowLatency && url.pathExtension.lowercased() == "m3u8"
+        let rewrite = adaptive || lowLatency
+        let assetURL = rewrite ? (HLSPlaylistLoader.assetURL(for: url) ?? url) : url
         let asset = AVURLAsset(url: assetURL, options: options)
         if rewrite {
-            let loader = MultivariantPlaylistLoader(headers: stream.headers)
+            let loader = HLSPlaylistLoader(headers: stream.headers, lowLatency: lowLatency)
             asset.resourceLoader.setDelegate(loader, queue: loader.queue)
             playlistLoader = loader
         } else {
@@ -107,6 +111,12 @@ final class PlayerModel: ObservableObject {
         }
         let item = AVPlayerItem(asset: asset)
         item.preferredMaximumResolutionForExpensiveNetworks = maxResolutionOnCellular
+        if lowLatency {
+            // AVPlayer otherwise starts about three segments behind the live edge,
+            // and drifts further back after each stall.
+            item.configuredTimeOffsetFromLive = CMTime(seconds: Self.lowLatencyOffset, preferredTimescale: 600)
+            item.automaticallyPreservesTimeOffsetFromLive = true
+        }
         isAdaptive = adaptive
         applyBackgroundAudioOnly(to: item)
         videoHeight = nil
@@ -193,6 +203,17 @@ final class PlayerModel: ObservableObject {
         } else if player.currentItem != nil {
             pausedByUser = true
         }
+    }
+
+    /// Seconds behind the live edge to play in low-latency mode. AVPlayer won't
+    /// go below three target durations, which for Twitch's 2 s segments is 6 s.
+    static let lowLatencyOffset = 6.0
+
+    /// Wall-clock delay of what's on screen, from the playlist's
+    /// `EXT-X-PROGRAM-DATE-TIME` (includes the service's encode/ingest delay).
+    var latency: Double? {
+        guard isLive, let date = player.currentItem?.currentDate() else { return nil }
+        return Date().timeIntervalSince(date)
     }
 
     private func seekToLive() {

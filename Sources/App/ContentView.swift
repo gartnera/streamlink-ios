@@ -350,6 +350,11 @@ struct ContentView: View {
             "time_control": ["paused", "waiting", "playing"][p.player.timeControlStatus.rawValue],
             "item_status": item.map { ["unknown", "ready", "failed"][$0.status.rawValue] } as Any,
             "item_error": item?.error?.localizedDescription as Any,
+            "latency": p.latency as Any,
+            "configured_live_offset": item.map { $0.configuredTimeOffsetFromLive.seconds }
+                .flatMap { $0.isFinite ? $0 : nil } as Any,
+            "recommended_live_offset": item.map { $0.recommendedTimeOffsetFromLive.seconds }
+                .flatMap { $0.isFinite ? $0 : nil } as Any,
         ]
         if let ev = item?.accessLog()?.events.last {
             player["observed_kbps"] = Int(ev.observedBitrate / 1000)
@@ -451,9 +456,11 @@ struct ContentView: View {
                     controller.pluginName = s.plugin
                 }
                 controller.selectedQuality = sel.name
+                let lowLatency = args.contains("--smoke-low-latency")
+                out["low_latency"] = lowLatency
                 controller.player.load(sel, title: controller.nowPlayingTitle,
                                        subtitle: controller.pluginName ?? "Streamlink",
-                                       adaptive: sel.name == "auto")
+                                       adaptive: sel.name == "auto", lowLatency: lowLatency)
                 controller.refreshNowPlayingInfo(url: url, fallbackTitle: controller.nowPlayingTitle)
                 let pb = await probePlayback(sel)
                 out.merge(pb) { _, new in new }
@@ -461,6 +468,10 @@ struct ContentView: View {
                 out["video_height"] = controller.player.videoHeight as Any
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 out["video_height_10s"] = controller.player.videoHeight as Any
+                // Live streams only; nil for VOD.
+                out["latency_10s"] = controller.player.latency as Any
+                out["recommended_live_offset_10s"] = controller.player.player.currentItem
+                    .map { $0.recommendedTimeOffsetFromLive.seconds }.flatMap { $0.isFinite ? $0 : nil } as Any
                 if let ev = controller.player.player.currentItem?.accessLog()?.events.last {
                     out["observed_kbps"] = Int(ev.observedBitrate / 1000)
                     out["indicated_kbps"] = Int(ev.indicatedBitrate / 1000)

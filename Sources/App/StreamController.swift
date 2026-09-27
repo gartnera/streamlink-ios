@@ -92,19 +92,19 @@ final class StreamController: ObservableObject {
     /// Whether the current URL is a Twitch stream (so we should attach auth).
     private var isTwitch: Bool { urlText.lowercased().contains("twitch.tv") }
 
-    /// Build a request body, attaching the Twitch auth token and any Streamlink
-    /// options (e.g. low latency) that apply.
+    /// Build a request body, attaching the Twitch auth token if there is one.
     private func requestBody(_ base: [String: Any]) async -> [String: Any] {
         var body = base
         if isTwitch, let token = await TwitchAuth.token() {
             body["twitch_auth"] = token
         }
-        var options: [String: Any] = [:]
-        if isTwitch, UserDefaults.standard.bool(forKey: "twitch_low_latency") {
-            options["twitch-low-latency"] = true
-        }
-        if !options.isEmpty { body["options"] = options }
         return body
+    }
+
+    /// Low latency is a player setting: Streamlink's `twitch-low-latency` only
+    /// changes its own HLS reader, which AVPlayer doesn't use.
+    private var lowLatency: Bool {
+        isTwitch && UserDefaults.standard.bool(forKey: "twitch_low_latency")
     }
 
     /// Resolve the available qualities for `urlText` without starting playback.
@@ -143,7 +143,7 @@ final class StreamController: ObservableObject {
         selectedQuality = quality
         status = "Opening \(quality)…"
         // Captured up front: the URL field is editable while we await below.
-        let url = urlText, title = nowPlayingTitle
+        let url = urlText, title = nowPlayingTitle, lowLatency = lowLatency
         do {
             let body = await requestBody(["op": "resolve", "url": url, "quality": quality])
             let r: ResolveResponse = try await PythonBridge.shared.request(
@@ -154,7 +154,8 @@ final class StreamController: ObservableObject {
                 let cap = sel.name == "auto" && capOnCellular ? CGSize(width: 1280, height: 720) : .zero
                 player.load(sel, title: title,
                             subtitle: pluginName ?? "Streamlink", audioOnly: audioOnly,
-                            adaptive: sel.name == "auto", maxResolutionOnCellular: cap)
+                            adaptive: sel.name == "auto", maxResolutionOnCellular: cap,
+                            lowLatency: lowLatency)
                 refreshNowPlayingInfo(url: url, fallbackTitle: title)
                 status = "Playing \(sel.name)"
             } else {
