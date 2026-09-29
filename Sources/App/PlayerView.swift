@@ -140,7 +140,26 @@ struct PlayerView: UIViewControllerRepresentable {
         }
 
         func playerViewControllerDidStopPictureInPicture(_ playerViewController: AVPlayerViewController) {
+            pipEnded()
+        }
+
+        /// E.g. when the stream switched to audio-only while PiP was starting.
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  failedToStartPictureInPictureWithError error: Error) {
+            pipEnded()
+        }
+
+        private func pipEnded() {
             pipActive = false
+            // Switching to audio-only in the background (e.g. "Audio-only in
+            // background") ends PiP, which leaves the player attached, and AVKit
+            // then pauses it. Detach and keep the audio going, as when PiP never
+            // started. (Closing PiP on a video stream still pauses, as usual.)
+            guard UIApplication.shared.applicationState == .background,
+                  model?.isAudioOnly == true, controller?.player != nil else { return }
+            controller?.player = nil
+            model?.resumeAfterSystemPause()
+            model?.setBackgroundAudioOnly(true)
         }
 
         func playerViewController(
