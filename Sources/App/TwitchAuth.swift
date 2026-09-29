@@ -16,14 +16,9 @@ enum TwitchAuth {
 
     /// The current Twitch OAuth token, if the user is logged in via the chat view.
     static func token() async -> String? {
-        await cookie(named: "auth-token")
-    }
-
-    /// The value of a twitch.tv cookie in the webview store.
-    static func cookie(named name: String) async -> String? {
         let cookies = await allCookies()
         return cookies.first {
-            $0.name == name && $0.domain.contains("twitch.tv")
+            $0.name == "auth-token" && $0.domain.contains("twitch.tv")
         }?.value
     }
 

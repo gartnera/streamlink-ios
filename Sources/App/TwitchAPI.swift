@@ -155,7 +155,9 @@ enum TwitchAPI {
         req.httpMethod = "POST"
         await browserHeaders().forEach { req.setValue($1, forHTTPHeaderField: $0) }
         req.setValue(clientID, forHTTPHeaderField: "Client-ID")
-        req.setValue(await deviceID(), forHTTPHeaderField: "X-Device-Id")
+        // No X-Device-Id, as in Streamlink: with one, Twitch serves a pre-roll
+        // ad break (its "Preparing your stream" slate) on every stream start.
+
         // As Safari's `fetch` from player.twitch.tv sends it.
         req.setValue("text/plain;charset=UTF-8", forHTTPHeaderField: "Content-Type")
         req.setValue("empty", forHTTPHeaderField: "Sec-Fetch-Dest")
@@ -174,18 +176,6 @@ enum TwitchAPI {
             throw APIError(message: "Twitch API: \(error): \(json["message"] as? String ?? "unknown error")")
         }
         return json["data"] as? [String: Any] ?? [:]
-    }
-
-    /// The browser's Twitch device id: the webview's `unique_id` cookie once
-    /// twitch.tv has set one, else a persisted id in the same format.
-    private static func deviceID() async -> String {
-        if let cookie = await TwitchAuth.cookie(named: "unique_id") { return cookie }
-        let key = "twitch_device_id"
-        if let id = UserDefaults.standard.string(forKey: key) { return id }
-        let chars = Array("abcdefghijklmnopqrstuvwxyz0123456789")
-        let id = String((0..<32).map { _ in chars.randomElement()! })
-        UserDefaults.standard.set(id, forKey: key)
-        return id
     }
 
     private static func gql(persisted operation: String, hash: String, variables: [String: Any],

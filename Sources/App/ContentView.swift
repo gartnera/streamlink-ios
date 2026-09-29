@@ -415,7 +415,8 @@ struct ContentView: View {
         let quality = args.firstIndex(of: "--smoke-quality").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "best"
         var out: [String: Any] = ["url": url, "quality": quality]
         do {
-            let r = try await ResolvedStreams.resolve(url, twitchAuth: await TwitchAuth.token())
+            let auth = await TwitchAuth.token()
+            let r = try await ResolvedStreams.resolve(url, twitchAuth: auth)
             let sel = r.select(quality)
             out["ok"] = sel != nil
             out["plugin"] = r.plugin
@@ -424,6 +425,10 @@ struct ContentView: View {
             out["request_headers"] = r.headers
             out["selected_url"] = sel?.url as Any
             out["selected_name"] = sel?.name as Any
+            out["twitch_logged_in"] = auth != nil
+            // Ad markers in a media playlist of this session (e.g. a pre-roll).
+            let media = r.multivariant != nil ? r.streams.first?.url : nil
+            if let media { out["playlist_markers"] = await Self.playlistMarkers(media, headers: r.headers) }
             if let sel {
                 controller.urlText = url
                 // Populate qualities so the on-screen UI matches a real session.
@@ -443,6 +448,7 @@ struct ContentView: View {
                 out["video_height"] = controller.player.videoHeight as Any
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 out["video_height_10s"] = controller.player.videoHeight as Any
+                if let media { out["playlist_markers_10s"] = await Self.playlistMarkers(media, headers: r.headers) }
                 // Live streams only; nil for VOD.
                 out["latency_10s"] = controller.player.latency as Any
                 out["recommended_live_offset_10s"] = controller.player.player.currentItem
@@ -465,6 +471,26 @@ struct ContentView: View {
             out["error"] = error.localizedDescription
         }
         writeResult("smoke_result.json", out)
+    }
+
+    /// Segment titles, `EXT-X-DATERANGE` classes and discontinuities in a media
+    /// playlist: Twitch marks ad breaks with `twitch-stitched-ad` ranges and
+    /// non-"live" segment titles.
+    private static func playlistMarkers(_ url: URL, headers: [String: String]) async -> [String: Any] {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let text = String(data: data, encoding: .utf8) else { return ["error": "fetch failed"] }
+        let lines = text.components(separatedBy: .newlines)
+        let titles = lines.filter { $0.hasPrefix("#EXTINF:") }
+            .map { $0.split(separator: ",", maxSplits: 1).dropFirst().first.map(String.init) ?? "" }
+        let ranges = lines.filter { $0.hasPrefix("#EXT-X-DATERANGE:") }
+        return [
+            "titles": Array(Set(titles)).sorted(),
+            "daterange_classes": Array(Set(ranges.compactMap { HLSPlaylistLoader.attribute("CLASS", in: $0) })).sorted(),
+            "stitched_ad": ranges.contains { $0.contains("stitched-ad") } || titles.contains { $0.contains("Amazon") },
+            "discontinuities": lines.filter { $0.hasPrefix("#EXT-X-DISCONTINUITY") }.count,
+        ]
     }
 
     /// Build an AVPlayer exactly as PlayerView does and wait until it is actually
