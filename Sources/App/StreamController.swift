@@ -16,7 +16,7 @@ struct SavedStream: Codable, Identifiable, Hashable {
 final class StreamController: ObservableObject {
     let player = PlayerModel()
 
-    @Published var urlText: String = "https://streamlink.github.io/"
+    @Published var urlText: String = ""
     /// Available qualities: `best`, `audio_only`, then concrete qualities best → worst.
     @Published var qualities: [String] = []
     /// Alias → concrete quality for the current stream, e.g. "best" → "1080p60".
@@ -92,17 +92,13 @@ final class StreamController: ObservableObject {
     /// Whether the current URL is a Twitch stream (so we should attach auth).
     private var isTwitch: Bool { urlText.lowercased().contains("twitch.tv") }
 
-    /// Build a request body, attaching the Twitch auth token if there is one.
-    private func requestBody(_ base: [String: Any]) async -> [String: Any] {
-        var body = base
-        if isTwitch, let token = await TwitchAuth.token() {
-            body["twitch_auth"] = token
-        }
-        return body
+    /// Resolve `url`'s streams, with the Twitch auth token if there is one.
+    private func resolveStreams(_ url: String) async throws -> ResolvedStreams {
+        let token = url.lowercased().contains("twitch.tv") ? await TwitchAuth.token() : nil
+        return try await ResolvedStreams.resolve(url, twitchAuth: token)
     }
 
-    /// Low latency is a player setting: Streamlink's `twitch-low-latency` only
-    /// changes its own HLS reader, which AVPlayer doesn't use.
+    /// Low latency is a player setting (see HLSPlaylistLoader).
     private var lowLatency: Bool {
         isTwitch && UserDefaults.standard.bool(forKey: "twitch_low_latency")
     }
@@ -115,22 +111,16 @@ final class StreamController: ObservableObject {
         qualities = []; aliasTargets = [:]; pluginName = nil
         channelInfo = nil   // re-fetch: the stream title/game may have changed
         do {
-            let body = await requestBody([
-                "op": "streams", "url": urlText,
-                "allow_auto": UserDefaults.standard.bool(forKey: "auto_quality"),
-            ])
-            let r: ResolveResponse = try await PythonBridge.shared.request(
-                body, as: ResolveResponse.self)
-            if r.ok, let streams = r.streams, !streams.isEmpty {
-                qualities = streams
-                aliasTargets = r.aliases ?? [:]
-                pluginName = r.plugin
-                selectedQuality = streams.contains("best") ? "best" : streams[0]
-                status = "Found \(streams.count) qualities."
-                return true
-            } else {
-                status = "No streams: \(r.error ?? "unknown error")"
-            }
+            let r = try await resolveStreams(urlText)
+            let streams = r.qualityNames(allowAuto: UserDefaults.standard.bool(forKey: "auto_quality"))
+            qualities = streams
+            aliasTargets = r.aliases
+            pluginName = r.plugin
+            selectedQuality = streams.contains("best") ? "best" : streams[0]
+            status = "Found \(streams.count) qualities."
+            return true
+        } catch let error as ResolvedStreams.ResolveError {
+            status = "No streams: \(error.message)"
         } catch {
             status = "Error: \(error.localizedDescription)"
         }
@@ -145,10 +135,8 @@ final class StreamController: ObservableObject {
         // Captured up front: the URL field is editable while we await below.
         let url = urlText, title = nowPlayingTitle, lowLatency = lowLatency
         do {
-            let body = await requestBody(["op": "resolve", "url": url, "quality": quality])
-            let r: ResolveResponse = try await PythonBridge.shared.request(
-                body, as: ResolveResponse.self)
-            if r.ok, let sel = r.selected {
+            // Resolved afresh each time, for a new token and live edge.
+            if let sel = try await resolveStreams(url).select(quality) {
                 let audioOnly = quality.lowercased().contains("audio")
                 // Auto streams adapt inside AVPlayer, so let it apply the cellular cap.
                 let cap = sel.name == "auto" && capOnCellular ? CGSize(width: 1280, height: 720) : .zero
@@ -159,8 +147,10 @@ final class StreamController: ObservableObject {
                 refreshNowPlayingInfo(url: url, fallbackTitle: title)
                 status = "Playing \(sel.name)"
             } else {
-                status = "Cannot play: \(r.error ?? "unknown error")"
+                status = "Cannot play: no playable streams found for this URL"
             }
+        } catch let error as ResolvedStreams.ResolveError {
+            status = "Cannot play: \(error.message)"
         } catch {
             status = "Error: \(error.localizedDescription)"
         }

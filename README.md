@@ -1,14 +1,11 @@
 # Streamlink for iOS
 
-A native iOS app that runs the **actual Python [Streamlink](https://streamlink.github.io/)
-engine on-device** to resolve a stream from any supported service, then plays it through
-the native iOS audio/video stack (`AVPlayer` + `AVAudioSession`) — with background audio and
+A native iOS app that plays Twitch streams (and plain HLS URLs) through the native iOS
+audio/video stack (`AVPlayer` + `AVAudioSession`) — with background audio and
 Control Center / AirPlay for free.
 
-This is **not** a web wrapper. It embeds CPython 3.14 (via
-[Python-Apple-support](https://github.com/beeware/Python-Apple-support)) and the full
-Streamlink package, including its two C-extension dependencies (`lxml`, `pycryptodome`)
-cross-compiled for iOS.
+It resolves streams itself, in Swift, the way [Streamlink](https://streamlink.github.io/)'s
+Twitch plugin does: no embedded Python, no web wrapper.
 
 | Streams | Player | Mini player | Settings |
 | :---: | :---: | :---: | :---: |
@@ -16,8 +13,8 @@ cross-compiled for iOS.
 
 ## Features
 
-- Play any stream Streamlink supports: saved streams list, Best / Audio-only / Auto
-  (adaptive) quality, and a quality picker on the player.
+- Twitch live channels, VODs and clips, plus direct HLS (`hls://…` or `.m3u8` URLs): saved
+  streams list, Best / Audio-only / Auto (adaptive) quality, and a quality picker on the player.
 - Full player with chat underneath, a draggable in-app mini player, and Picture in Picture.
 - Background audio, with optional drop to audio-only when the app leaves the foreground.
 - Lock screen / Control Center controls; Twitch streams show the stream title, game and
@@ -30,68 +27,40 @@ cross-compiled for iOS.
 
 ```mermaid
 flowchart LR
-    UI["SwiftUI UI"] -- "resolve(url, quality)" --> Bridge["PythonBridge<br/>(CPython C API, JSON)"]
-    Bridge --> Py["slbridge.py"]
-    Py --> SL["Streamlink session<br/>(plugins, auth, HLS logic)"]
-    SL -- "playable URL + HTTP headers" --> Py
-    Py -- "JSON response" --> Bridge
-    Bridge --> UI
+    UI["SwiftUI UI"] -- "resolve(url, quality)" --> Resolver["ResolvedStreams"]
+    Resolver -- "PlaybackAccessToken" --> GQL[("gql.twitch.tv")]
+    Resolver -- "signed playlist" --> Usher[("usher.ttvnw.net")]
+    Resolver -- "playable URL + HTTP headers" --> UI
     UI -- "load(url, headers)" --> Player["AVPlayer + AVAudioSession"]
     Player -- "HLS segments" --> CDN[("Stream CDN")]
 ```
 
-- **Streamlink only resolves** the stream (its plugins, auth, HLS/DASH logic). It hands back a
-  playable URL, which `AVPlayer` decodes natively — so audio flows through CoreAudio with no
-  bundled FFmpeg.
-- The Swift ↔ Python boundary is a single `slbridge.handle(json) -> json` call over the CPython
-  C API (`Sources/Bridge/PyBridge.m`), which is robust on iOS and avoids PythonKit's dlopen quirks.
-- On iOS every compiled `.so` must live in a signed `.framework`. The `Python.xcframework`'s
-  `build/utils.sh` does that conversion at build time (a Run Script phase); pycryptodome loads its
-  libs via `ctypes`, so `slbridge` monkeypatches its loader to follow the `.fwork` markers.
+- `TwitchAPI` gets a playback access token from Twitch's GQL API (with the login cookie from the
+  chat webview, if any), then the multivariant playlist from usher, signed with it. Clips are
+  plain MP4s signed the same way.
+- `ResolvedStreams` names the variants and picks `best` like Streamlink does; `auto` hands
+  `AVPlayer` the multivariant playlist so it adapts on its own.
+- Requests identify as Mobile Safari (WebKit's own user agent plus Safari's `Version/…
+  Safari/604.1` tokens, which the chat webview uses too), with the web player's Origin/Referer,
+  and AVPlayer gets the same headers for playlists and segments.
 
 ## Requirements
 
 - macOS with **Xcode 16+** (built/tested against Xcode 26, iOS 26 SDK)
-- [`uv`](https://github.com/astral-sh/uv), [`xcodegen`](https://github.com/yonaskolb/XcodeGen), `curl`
-  ```
-  brew install uv xcodegen
-  ```
+- [`xcodegen`](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
 
 ## Build & run (simulator)
 
 ```bash
-make bootstrap    # fetch the Python runtime + assemble on-device packages
 make project      # generate Streamlink.xcodeproj
 make build        # build for the iOS Simulator
 make run          # boot a simulator, install, launch
 ```
 
-`make smoke` resolves a public HLS sample through Streamlink and asserts `AVPlayer` reaches the
-playing state — a headless end-to-end check.
+`make smoke` resolves a public HLS sample and asserts `AVPlayer` reaches the playing state — a
+headless end-to-end check. Point it at Twitch with `make smoke SMOKE_URL=https://twitch.tv/<channel>`.
 
 Pick a simulator with `SIM=`, e.g. `make run SIM="iPhone 17 Pro"`.
-
-## The iOS wheels (`lxml`, `pycryptodome`)
-
-Neither has an iOS wheel on PyPI, so they are cross-compiled once (including a static
-libxml2 + libxslt for `lxml`) and **hosted**, not committed:
-
-```bash
-make wheels       # cross-compile all 4 wheels -> vendor/wheels/ (+ manifest.txt, SHA256SUMS.txt)
-```
-
-It produces device + simulator arm64 wheels for both packages.
-
-`make bootstrap` obtains the wheels in this priority:
-
-1. a local `vendor/wheels/*.whl` (what `make wheels` writes), else
-2. downloaded from `WHEELS_URL` (default: this repo's GitHub Release `wheels-3.14`; point it at an
-   S3 bucket or any URL instead):
-   ```bash
-   WHEELS_URL="https://my-bucket.s3.amazonaws.com/streamlink-ios/wheels-3.14" make bootstrap
-   ```
-
-To publish the wheels you built: upload `vendor/wheels/*.whl` (and `manifest.txt`) to that location.
 
 ## Sideloading to a device
 
@@ -110,21 +79,14 @@ needed. Bundle id is `com.agartner.streamlink`; change it in `project.yml` if yo
 ```
 project.yml            XcodeGen project spec
 Makefile               build orchestration
-scripts/
-  build-wheels.sh      cross-compile lxml + pycryptodome (libxml2/libxslt) for iOS
-  bootstrap.sh         fetch Python runtime, assemble app_packages + native/<slice>
-  run-sim.sh           boot / install / launch / smoke on the simulator
-Sources/App/           SwiftUI app, AVPlayer, AVAudioSession, Python bridge wrapper
-Sources/Bridge/        CPython C-API bridge (Objective-C)
-app/slbridge.py        Python entry point called from Swift
-vendor/wheels/         iOS wheels (produced by make wheels; hosted, gitignored)
+scripts/run-sim.sh     boot / install / launch / smoke on the simulator
+Sources/App/           SwiftUI app, stream resolution (TwitchAPI, StreamResolver), AVPlayer
+UIDriver/              XCUITest-based UI driver (make ui-driver)
 ```
 
 ## Notes / limitations
 
-- **DASH-only** streams are out of scope: `AVPlayer` has no native DASH. HLS and progressive
-  streams (the large majority of Streamlink sources) play natively.
-- Streamlink is installed without the optional `[decompress]` (brotli/zstd) extra.
-- Pinned versions: Python 3.14 (Python-Apple-support `3.14-b11`), Streamlink 8.6.1,
-  lxml 6.1.3, pycryptodome 3.23.0, libxml2 2.13.8, libxslt 1.1.43. Override via env
-  (see `scripts/build-wheels.sh`).
+- Only Twitch and direct HLS: the other sites Streamlink supports aren't.
+- **DASH-only** streams are out of scope: `AVPlayer` has no native DASH.
+- Picking one quality of a stream whose audio is a separate rendition (not Twitch's) plays that
+  variant's video only; Auto keeps the audio.

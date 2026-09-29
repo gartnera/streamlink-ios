@@ -19,6 +19,7 @@ struct WebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.websiteDataStore = .default()   // persistent, shared cookie store
+        config.applicationNameForUserAgent = TwitchAPI.safariApplicationName   // same "Safari" as our API calls
         if betterTTV {
             config.userContentController.addUserScript(WKUserScript(
                 source: Self.betterTTVLoaderJS, injectionTime: .atDocumentEnd,

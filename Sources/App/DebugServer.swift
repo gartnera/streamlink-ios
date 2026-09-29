@@ -14,7 +14,6 @@ private let log = Logger(subsystem: "com.agartner.streamlink", category: "DebugS
 ///     curl -X POST localhost:8765/action/settings            # navigate; see ContentView.debugAction
 ///     curl -d '{"url":"hls://…"}' localhost:8765/action/open
 ///     curl localhost:8765/screenshot > shot.png
-///     curl -d 'session.version' localhost:8765/python        # REPL cell in the embedded CPython
 ///     curl -d 'return document.title' localhost:8765/eval    # async JS function body, chat webview
 ///     curl localhost:8765/log                                # chat console.* + JS errors, app events
 ///
@@ -251,7 +250,6 @@ final class DebugServer {
     GET  /state                 app + player state
     POST /action/<name>         JSON args body; names listed in /state "actions"
     GET  /screenshot            PNG of the key window
-    POST /python                body: Python source, run like a REPL cell
     POST /eval                  body: async JS function body, run in the chat webview
     GET|DELETE /log             chat console + app events
 
@@ -276,17 +274,6 @@ final class DebugServer {
                 switch result {
                 case .success(let value): self?.respond(conn, 200, Self.describe(value) + "\n")
                 case .failure(let error): self?.respond(conn, 500, "\((error as NSError).userInfo["WKJavaScriptExceptionMessage"] ?? error.localizedDescription)\n")
-                }
-            }
-        case ("POST", "/python"):
-            Task {
-                do {
-                    let r = try await PythonBridge.shared.request(["op": "exec", "code": request.body],
-                                                                  as: ExecResponse.self)
-                    let text = (r.output ?? "") + (r.ok ? r.value.map { $0 + "\n" } ?? "" : r.error ?? "unknown error\n")
-                    respond(conn, r.ok ? 200 : 500, text)
-                } catch {
-                    respond(conn, 500, "\(error.localizedDescription)\n")
                 }
             }
         case ("GET", "/state"):

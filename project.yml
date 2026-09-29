@@ -11,18 +11,7 @@ settings:
     DEVELOPMENT_TEAM: ""
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "5.0"
-    # Required by Python-Apple-support integration:
-    ENABLE_USER_SCRIPT_SANDBOXING: NO
     ENABLE_TESTABILITY: YES
-    FRAMEWORK_SEARCH_PATHS:
-      - $(inherited)
-      - $(PROJECT_DIR)
-    HEADER_SEARCH_PATHS:
-      - $(inherited)
-      - $(BUILT_PRODUCTS_DIR)/Python.framework/Headers
-    GCC_WARN_ABOUT_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER: NO
-    # Streamlink probes many hostnames; allow arbitrary loads for stream I/O.
-    SWIFT_OBJC_BRIDGING_HEADER: Sources/Bridge/Streamlink-Bridging-Header.h
 
 targets:
   Streamlink:
@@ -30,16 +19,6 @@ targets:
     platform: iOS
     sources:
       - path: Sources
-      - path: app
-        type: folder
-        buildPhase: resources
-      - path: app_packages
-        type: folder
-        buildPhase: resources
-    dependencies:
-      - framework: Python.xcframework
-        embed: true
-        codeSign: true
     info:
       path: Generated/Info.plist
       properties:
@@ -60,6 +39,7 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # Direct HLS URLs may be plain http.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         # The debug server (Debug builds only) listens on the local network on devices.
@@ -71,35 +51,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.agartner.streamlink
-        # The install_python run script needs a stable Python version string.
-        MARKETING_VERSION: "0.1.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-    postBuildScripts:
-      - name: Process Python libraries
-        basedOnDependencyAnalysis: false
-        shell: /bin/bash
-        script: |
-          set -e
-          source "$PROJECT_DIR/Python.xcframework/build/utils.sh"
-
-          # Select the platform-correct native (compiled) packages and overlay
-          # them into the app_packages already copied into the bundle.
-          if [ "$EFFECTIVE_PLATFORM_NAME" = "-iphonesimulator" ]; then
-            NATIVE_SLICE="iphonesimulator"
-          else
-            NATIVE_SLICE="iphoneos"
-          fi
-          NATIVE_DIR="$PROJECT_DIR/native/$NATIVE_SLICE"
-          if [ -d "$NATIVE_DIR" ]; then
-            echo "Overlaying native modules from $NATIVE_SLICE"
-            rsync -au "$NATIVE_DIR/" "$CODESIGNING_FOLDER_PATH/app_packages/"
-          else
-            echo "warning: no native modules for $NATIVE_SLICE ($NATIVE_DIR missing)"
-          fi
-
-          # Install stdlib + convert every .so (stdlib + app_packages) into a
-          # signed framework, as required by iOS.
-          install_python Python.xcframework app app_packages
 
   # Interactive UI driver (UIDriver/UIDriver.swift): an XCUITest that serves HTTP.
   StreamlinkUIDriver:
@@ -114,7 +66,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.agartner.streamlinkUIDriver
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Streamlink
-        SWIFT_OBJC_BRIDGING_HEADER: ""
         # The runner app listens on the network on devices.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Lets development tools drive the app's UI.
 

@@ -1,7 +1,5 @@
 # Streamlink for iOS — build orchestration.
 #
-#   make wheels      cross-compile lxml + pycryptodome iOS wheels (once)
-#   make bootstrap   fetch Python runtime + assemble on-device packages
 #   make project     generate Streamlink.xcodeproj (needs: brew install xcodegen)
 #   make build       build for the iOS Simulator
 #   make run         boot a simulator, install, and launch the app
@@ -17,15 +15,9 @@ BUNDLE  ?= com.agartner.streamlink
 DERIVED ?= build
 SMOKE_URL ?= hls://https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
 
-.PHONY: all bootstrap project build run smoke ui-driver ui-driver-device wheels clean distclean
+.PHONY: all project build run smoke ui-driver ui-driver-device clean distclean
 
-all: bootstrap project build
-
-wheels:
-	./scripts/build-wheels.sh
-
-bootstrap:
-	./scripts/bootstrap.sh
+all: project build
 
 project:
 	xcodegen generate
@@ -70,4 +62,4 @@ clean:
 	rm -rf $(DERIVED)
 
 distclean: clean
-	rm -rf Python.xcframework app_packages native $(PROJECT) Generated .build-tmp
+	rm -rf $(PROJECT) Generated

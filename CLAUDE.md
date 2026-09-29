@@ -11,7 +11,7 @@ Every change goes through these steps in order. Don't skip ahead.
      old result first
      (`rm "$(xcrun simctl get_app_container booted com.agartner.streamlink data)/Documents/smoke_result.json"`),
      or the script may print a stale file from a previous run.
-   - App internals (state, navigation, Python, chat JS, logs): launch with
+   - App internals (state, navigation, chat JS, logs): launch with
      `--debug-server` and use the HTTP API in `Sources/App/DebugServer.swift`.
    - Driving the UI (tree, tap, type, drag): `make ui-driver` in the background,
      then the HTTP API in `UIDriver/UIDriver.swift`.

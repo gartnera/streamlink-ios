@@ -12,7 +12,6 @@ struct ContentView: View {
     @StateObject private var controller = StreamController()
     @State private var presentation: PlayerPresentation = .full
     @GestureState private var dragY: CGFloat = 0
-    @State private var diag: DiagResponse?
     @State private var showDiagnostics = false
     /// True while the keyboard is up (e.g. typing in chat) — we then collapse the
     /// video/quality chrome so the chat webview fills the space above the keyboard.
@@ -47,7 +46,7 @@ struct ContentView: View {
         // otherwise shrink the GeometryReader); we inset the chat manually via
         // keyboardHeight, so this avoids double-counting and the webview overflow.
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .sheet(isPresented: $showDiagnostics) { DiagnosticsView(diag: diag) }
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
         .onChange(of: controller.player.hasStream) { hasStream in
             // Test hook: launch with `--mini` to show a new stream in the mini player.
             let mini = ProcessInfo.processInfo.arguments.contains("--mini")
@@ -67,7 +66,6 @@ struct ContentView: View {
             guard !Self.isOnMac else { return }
             withAnimation(.easeOut(duration: 0.25)) { keyboardVisible = false }
         }
-        .task { await runDiagnostics() }
         .task { await maybeRunSmokeTest() }
         // Test hook: launch with `--show-info` to open the Settings sheet.
         .task { if ProcessInfo.processInfo.arguments.contains("--show-info") { showDiagnostics = true } }
@@ -307,24 +305,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Diagnostics
-
-    private func runDiagnostics() async {
-        do {
-            let d: DiagResponse = try await PythonBridge.shared.request(["op": "diag"], as: DiagResponse.self)
-            diag = d
-            NSLog("[Streamlink] diag: python=\(d.python ?? "?") checks=\(d.checks ?? [:])")
-            writeResult("diag.json", [
-                "ok": d.ok, "python": d.python as Any, "platform": d.platform as Any,
-                "checks": d.checks as Any,
-            ])
-        } catch {
-            diag = DiagResponse(ok: false, python: nil, platform: nil, checks: nil, error: error.localizedDescription)
-            NSLog("[Streamlink] diag failed: \(error.localizedDescription)")
-            writeResult("diag.json", ["ok": false, "error": error.localizedDescription])
-        }
-    }
-
     // MARK: - Debug server
 
     #if DEBUG
@@ -434,27 +414,22 @@ struct ContentView: View {
         let url = args[i + 1]
         let quality = args.firstIndex(of: "--smoke-quality").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "best"
         var out: [String: Any] = ["url": url, "quality": quality]
-        // The debug server's Python REPL op: state persists and the last expression is returned.
-        if let e = try? await PythonBridge.shared.request(
-            ["op": "exec", "code": "_smoke = 6 * 7\nprint('out')\n_smoke"], as: ExecResponse.self) {
-            out["python_exec"] = e.ok ? "\(e.output ?? "")\(e.value ?? "")" : e.error ?? "failed"
-        }
         do {
-            let r: ResolveResponse = try await PythonBridge.shared.request(
-                ["op": "resolve", "url": url, "quality": quality], as: ResolveResponse.self)
-            out["ok"] = r.ok
-            out["error"] = r.error as Any
-            out["selected_url"] = r.selected?.url as Any
-            out["selected_name"] = r.selected?.name as Any
-            if r.ok, let sel = r.selected {
+            let r = try await ResolvedStreams.resolve(url, twitchAuth: await TwitchAuth.token())
+            let sel = r.select(quality)
+            out["ok"] = sel != nil
+            out["plugin"] = r.plugin
+            out["aliases"] = r.aliases
+            out["streams"] = r.streams.map(\.name)
+            out["request_headers"] = r.headers
+            out["selected_url"] = sel?.url as Any
+            out["selected_name"] = sel?.name as Any
+            if let sel {
                 controller.urlText = url
                 // Populate qualities so the on-screen UI matches a real session.
-                if let s: ResolveResponse = try? await PythonBridge.shared.request(
-                    ["op": "streams", "url": url, "allow_auto": UserDefaults.standard.bool(forKey: "auto_quality")], as: ResolveResponse.self), let list = s.streams {
-                    controller.qualities = list
-                    controller.aliasTargets = s.aliases ?? [:]
-                    controller.pluginName = s.plugin
-                }
+                controller.qualities = r.qualityNames(allowAuto: UserDefaults.standard.bool(forKey: "auto_quality"))
+                controller.aliasTargets = r.aliases
+                controller.pluginName = r.plugin
                 controller.selectedQuality = sel.name
                 let lowLatency = args.contains("--smoke-low-latency")
                 out["low_latency"] = lowLatency
@@ -529,9 +504,8 @@ struct ContentView: View {
     }
 }
 
-/// Runtime diagnostics, shown on demand rather than inline.
+/// The Settings sheet.
 struct DiagnosticsView: View {
-    let diag: DiagResponse?
     @Environment(\.dismiss) private var dismiss
     @State private var loggedIn = false
     @State private var showLogin = false
@@ -554,33 +528,6 @@ struct DiagnosticsView: View {
                 #if DEBUG
                 developerSection
                 #endif
-                if let diag {
-                    Section("Runtime") {
-                        LabeledContent("Python", value: diag.python ?? "?")
-                        LabeledContent("Platform", value: diag.platform ?? "—")
-                    }
-                    if let checks = diag.checks, !checks.isEmpty {
-                        Section("Checks") {
-                            ForEach(checks.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
-                                HStack(alignment: .top, spacing: 8) {
-                                    Image(systemName: v.hasPrefix("ok") ? "checkmark.circle.fill" : "xmark.circle.fill")
-                                        .foregroundStyle(v.hasPrefix("ok") ? .green : .red)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(k).font(.subheadline.weight(.medium))
-                                        Text(v).font(.caption.monospaced()).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if let err = diag.error {
-                        Section("Error") {
-                            Text(err).font(.caption.monospaced()).foregroundStyle(.red)
-                        }
-                    }
-                } else {
-                    Text("Loading Python runtime…").foregroundStyle(.secondary)
-                }
                 Section("About") {
                     LabeledContent("Version", value: appVersion)
                 }

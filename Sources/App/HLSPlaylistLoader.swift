@@ -161,7 +161,7 @@ final class HLSPlaylistLoader: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     /// The value of `NAME=value` / `NAME="value"` in an HLS tag's attribute list.
-    private static func attribute(_ name: String, in line: String) -> String? {
+    static func attribute(_ name: String, in line: String) -> String? {
         guard let match = attributeRegex(name).firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
               let range = Range(match.range(at: 1), in: line) else { return nil }
         return String(line[range]).trimmingCharacters(in: .init(charactersIn: "\""))
