@@ -96,32 +96,32 @@ struct ContentView: View {
             .opacity(chromeOpacity)
             .allowsHitTesting(full)
 
-        // Inset the chat above the keyboard (keyboard height minus the bottom
-        // safe area, which the keyboard already covers).
-        let kbInset = (videoHidden || (wide && keyboardVisible))
-            ? max(0, keyboardHeight - geo.safeAreaInsets.bottom) : 0
+        // Inset the chat above the keyboard. Stacked, that's the keyboard height
+        // minus the bottom safe area, which the keyboard already covers; side by
+        // side, chat runs into the bottom safe area, so the whole keyboard height.
+        let kbInset: CGFloat = wide
+            ? (keyboardVisible ? keyboardHeight : 0)
+            : (videoHidden ? max(0, keyboardHeight - geo.safeAreaInsets.bottom) : 0)
 
-        Group {
-            if wide {
-                // Desktop / landscape: video on the left, chat on the right.
-                HStack(spacing: 0) {
-                    Color.clear   // video area
-                        .frame(width: geo.size.width - chatColumnWidth(geo))
-                    Divider()
-                    ChatView(url: controller.chatURL)
-                        .padding(.bottom, kbInset)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    if !videoHidden {
-                        Color.clear.frame(height: fullVideoH)   // reserve the video area — no header above
-                    }
-                    ChatView(url: controller.chatURL)
-                }
-                .padding(.bottom, kbInset)
+        // Desktop / landscape: video on the left, chat on the right; otherwise
+        // chat below the video. One AnyLayout (not an if/else of stacks) keeps the
+        // chat webview's identity across rotation, so it isn't rebuilt and reloaded.
+        let layout = wide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+        layout {
+            if !videoHidden {
+                // Reserve the video area — no header above.
+                Color.clear.frame(width: wide ? geo.size.width - chatColumnWidth(geo) : nil,
+                                  height: wide ? nil : fullVideoH)
             }
+            if wide { Divider() }
+            ChatView(url: controller.chatURL)
+                .padding(.bottom, kbInset)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Side by side, the chat column is full height: down through the home
+        // indicator area too, which on a landscape phone is 20pt of short screen.
+        // (An edge set, not a conditional modifier, so the webview keeps its identity.)
+        .ignoresSafeArea(.container, edges: wide ? .bottom : [])
         .opacity(chromeOpacity)
         .allowsHitTesting(full)
 
@@ -265,7 +265,11 @@ struct ContentView: View {
     }
 
     private func chatColumnWidth(_ geo: GeometryProxy) -> CGFloat {
-        min(456, max(360, (geo.size.width * 0.36).rounded()))
+        // A phone in landscape is short, so the video is width-limited: every
+        // point of chat width comes out of the video. Keep chat narrow there.
+        geo.size.height < 500
+            ? min(340, max(280, (geo.size.width * 0.34).rounded()))
+            : min(456, max(360, (geo.size.width * 0.36).rounded()))
     }
 
     /// 0 → not dragging, 1 → dragged far enough to collapse.

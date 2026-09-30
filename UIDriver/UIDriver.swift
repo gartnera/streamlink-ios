@@ -13,6 +13,7 @@ import Network
 ///     curl -d 'e3 200,600' localhost:8766/drag   # press and drag from one point/ref to another
 ///     curl -d e3 'localhost:8766/press?seconds=1.5'   # long-press (default 1 s); skips the idle waits
 ///     curl -d home localhost:8766/button         # press home (wakes the screen), or "lock"
+///     curl -d left localhost:8766/orientation    # rotate: portrait, or left/right (landscape)
 ///     curl localhost:8766/screenshot > s.png
 ///     curl -d '--debug-server' localhost:8766/launch   # (re)launch with arguments; also /activate, /terminate
 ///     curl -X POST localhost:8766/shutdown
@@ -188,6 +189,15 @@ final class UIDriver: XCTestCase {
                 XCUIDevice.shared.perform(press)
             default: return text(400, "button: home or lock\n")
             }
+        case ("POST", "/orientation"):
+            // No upside-down: the app doesn't support it on iPhone, so it'd be a silent no-op.
+            let orientations: [String: UIDeviceOrientation] = [
+                "portrait": .portrait, "left": .landscapeLeft, "right": .landscapeRight,
+            ]
+            guard let orientation = orientations[body] else {
+                return text(400, "orientation: portrait, left or right\n")
+            }
+            XCUIDevice.shared.orientation = orientation
         case ("POST", "/launch"):
             target.launchArguments = body.split(separator: " ").map(String.init)
             target.launch()
@@ -202,7 +212,7 @@ final class UIDriver: XCTestCase {
             serving = false
             return text(200, "bye\n")
         default:
-            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /press /button /launch /activate /terminate /shutdown\n")
+            return text(404, "GET /tree /screenshot; POST /tap /type /swipe /drag /press /button /orientation /launch /activate /terminate /shutdown\n")
         }
         if acted {
             let settle = request.query["settle"].flatMap(Double.init) ?? 0.5
