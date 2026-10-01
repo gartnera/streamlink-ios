@@ -1,0 +1,11 @@
+# Mac Catalyst variant of project.yml, used by `make mac`. Kept separate so the
+# main project stays iOS-only. Catalyst builds can be ad-hoc signed, so the
+# result runs on any Mac without a provisioning profile.
+include:
+  - project.yml
+targets:
+  Streamlink:
+    settings:
+      base:
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO

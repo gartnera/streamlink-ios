@@ -74,10 +74,34 @@ their own free Apple ID:
 The only entitlement is background audio (`UIBackgroundModes: audio`) — no special provisioning
 needed. Bundle id is `com.agartner.streamlink`; change it in `project.yml` if you like.
 
+## Running on a Mac
+
+```bash
+make mac          # Mac Catalyst Release build → build/Streamlink-mac.zip
+```
+
+This builds a universal (Apple silicon + Intel), ad-hoc signed Mac Catalyst app, so it runs on
+any Mac without an Apple developer account or provisioning profile. To install it on another Mac,
+copy over the zip and run:
+
+```bash
+unzip Streamlink-mac.zip
+xattr -cr Streamlink.app            # clear quarantine; the app isn't notarized
+mkdir -p ~/Applications && mv Streamlink.app ~/Applications/
+open ~/Applications/Streamlink.app
+```
+
+Without the `xattr` step, Gatekeeper blocks the first launch. Right-click → Open (or
+System Settings → Privacy & Security → Open Anyway) also gets past it.
+
+You can also run the iOS app itself on Apple silicon ("My Mac (Designed for iPad)" in Xcode),
+but that copy only launches on Macs registered in your signing profile.
+
 ## Layout
 
 ```
 project.yml            XcodeGen project spec
+catalyst.yml           Mac Catalyst variant of the spec (make mac)
 Makefile               build orchestration
 scripts/run-sim.sh     boot / install / launch / smoke on the simulator
 Sources/App/           SwiftUI app, stream resolution (TwitchAPI, StreamResolver), AVPlayer
