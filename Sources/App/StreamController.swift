@@ -317,6 +317,15 @@ final class StreamController: ObservableObject {
         persistSaved()
     }
 
+    /// Expand typed shorthand into a full URL: a bare channel name ("xqc") is a
+    /// Twitch channel, and a scheme-less address ("twitch.tv/xqc") gets https.
+    static func normalizedURL(_ input: String) -> String {
+        let t = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, !t.contains("://") else { return t }
+        if !t.contains("."), !t.contains("/") { return "https://twitch.tv/\(t)" }
+        return "https://\(t)"
+    }
+
     static func defaultName(for url: String) -> String {
         guard let u = URL(string: url), let host = u.host else { return url }
         let clean = host.replacingOccurrences(of: "www.", with: "")

@@ -54,7 +54,7 @@ struct BrowseView: View {
     private var addSection: some View {
         Section("Add a stream") {
             HStack(spacing: 8) {
-                TextField("https://twitch.tv/...", text: $newURL)
+                TextField("Twitch channel or URL", text: $newURL)
                     .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -76,7 +76,7 @@ struct BrowseView: View {
 
             if !newURL.isEmpty {
                 Button {
-                    controller.add(url: newURL)
+                    controller.add(url: StreamController.normalizedURL(newURL))
                     newURL = ""
                 } label: {
                     Label("Save to list", systemImage: "bookmark")
@@ -129,7 +129,7 @@ struct BrowseView: View {
     }
 
     private func playNew() {
-        let url = newURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = StreamController.normalizedURL(newURL)
         guard !url.isEmpty else { return }
         openStream(url, quickQuality)
     }

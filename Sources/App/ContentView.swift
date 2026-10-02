@@ -418,6 +418,8 @@ struct ContentView: View {
         let url = args[i + 1]
         let quality = args.firstIndex(of: "--smoke-quality").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "best"
         var out: [String: Any] = ["url": url, "quality": quality]
+        out["normalized_samples"] = Dictionary(["xqc", " twitch.tv/xqc ", url]
+            .map { ($0, StreamController.normalizedURL($0)) }, uniquingKeysWith: { a, _ in a })
         do {
             let auth = await TwitchAuth.token()
             let r = try await ResolvedStreams.resolve(url, twitchAuth: auth)
