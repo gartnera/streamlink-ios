@@ -46,34 +46,7 @@ targets:
         NSLocalNetworkUsageDescription: Lets development tools on your network connect to the debug server.
         NSBonjourServices:
           - _sldebug._tcp
-    # Declared so the StreamlinkUIDriver scheme doesn't replace Xcode's autocreated one.
-    scheme: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.agartner.streamlink
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-
-  # Interactive UI driver (UIDriver/UIDriver.swift): an XCUITest that serves HTTP.
-  StreamlinkUIDriver:
-    type: bundle.ui-testing
-    platform: iOS
-    sources:
-      - path: UIDriver
-    dependencies:
-      - target: Streamlink
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.agartner.streamlinkUIDriver
-        GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Streamlink
-        # The runner app listens on the network on devices.
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Lets development tools drive the app's UI.
-
-schemes:
-  StreamlinkUIDriver:
-    build:
-      targets:
-        StreamlinkUIDriver: [test]
-    test:
-      targets:
-        - StreamlinkUIDriver

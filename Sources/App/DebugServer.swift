@@ -8,7 +8,7 @@ import os
 private let log = Logger(subsystem: "com.agartner.streamlink", category: "DebugServer")
 
 /// Debug-only HTTP hook into the app's internals, started with `--debug-server`
-/// or the Developer toggle in Settings. (UI flows are XCUITest's job.)
+/// or the Developer toggle in Settings. (UI flows are xcui-http's job.)
 ///
 ///     curl localhost:8765/state                              # app + player state (JSON)
 ///     curl -X POST localhost:8765/action/settings            # navigate; see ContentView.debugAction

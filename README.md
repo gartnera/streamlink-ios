@@ -105,7 +105,6 @@ catalyst.yml           Mac Catalyst variant of the spec (make mac)
 Makefile               build orchestration
 scripts/run-sim.sh     boot / install / launch / smoke on the simulator
 Sources/App/           SwiftUI app, stream resolution (TwitchAPI, StreamResolver), AVPlayer
-UIDriver/              XCUITest-based UI driver (make ui-driver)
 ```
 
 ## Notes / limitations
